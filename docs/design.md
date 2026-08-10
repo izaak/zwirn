@@ -92,15 +92,15 @@ Let `F` be canonical filesystem source, `E` canonical embedded source, and `H` t
 
 | `H` | Filesystem file | Relationship | State | Safe action |
 |---|---|---|---|---|
-| absent | absent | — | `unadopted` | `sync` or `pull` creates `F` and records `H` |
+| absent | absent | — | `unadopted` | `sync` or `extract` creates `F` and records `H` |
 | absent | present | `F = E` | `unadopted` | any mutating command records `H` |
-| absent | present | `F ≠ E` | `unadopted conflict` | targeted forced `push` or `pull` |
-| present | absent | — | `missing` | targeted `pull` recreates `F` |
+| absent | present | `F ≠ E` | `unadopted conflict` | targeted forced `embed` or `extract` |
+| present | absent | — | `missing` | targeted `extract` recreates `F` |
 | present | present | `F = E = H` | `synchronized` | none |
-| present | present | `E = H`, `F ≠ H` | `push` | `push` or `sync` |
-| present | present | `F = H`, `E ≠ H` | `pull` | `pull` or `sync` |
+| present | present | `E = H`, `F ≠ H` | `embed` | `embed` or `sync` |
+| present | present | `F = H`, `E ≠ H` | `extract` | `extract` or `sync` |
 | present | present | `F = E`, both differing from `H` | `converged` | any mutating command records the new `H` |
-| present | present | `F`, `E`, and `H` all differ | `conflict` | manual convergence or targeted forced `push` or `pull` |
+| present | present | `F`, `E`, and `H` all differ | `conflict` | manual convergence or targeted forced `embed` or `extract` |
 
 A successful action records the hash of the synchronized canonical source in the closing marker.
 
@@ -108,15 +108,15 @@ A successful action records the hash of the synchronized canonical source in the
 
 `zwirn status` is read-only and reports the state of every selected fragment.
 
-`zwirn push` applies safe filesystem-to-embedded actions.
+`zwirn embed` applies safe filesystem-to-embedded actions.
 
-`zwirn pull` applies safe embedded-to-filesystem actions.
+`zwirn extract` applies safe embedded-to-filesystem actions.
 
 `zwirn sync` applies safe actions in both directions and adopts unambiguous fragments.
 
 With no fragment arguments, a command selects every discovered fragment. One or more canonical fragment paths select an exact subset. An unknown selected path is a command error.
 
-`--force` is available on `push` and `pull` with explicitly selected paths. Every selected fragment must be in `conflict` or `unadopted conflict`. Forced `push` selects filesystem source. Forced `pull` selects embedded source.
+`--force` is available on `embed` and `extract` with explicitly selected paths. Every selected fragment must be in `conflict` or `unadopted conflict`. Forced `embed` selects filesystem source. Forced `extract` selects embedded source.
 
 Synchronization commands create and replace source content. Deletion is outside their operation.
 
