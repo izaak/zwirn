@@ -1,0 +1,60 @@
+// Smoothed signed angular output from input angle.
+// input is expected in [0, tau).
+// output is wrapped to [-pi, pi).
+
+// double-precision internal version.
+// ports are still f32 buffers, so inputs are cast to f64 internally,
+// and the final output sample is cast back to f32.
+
+var last_y: f64
+
+var pi: f64
+var tau: f64
+var inv_tau: f64
+var snap: f64
+
+init {
+    pi = 3.141592653589793f64
+    tau = pi * 2.0f64
+    inv_tau = 1.0f64 / tau
+    snap = 0.0001f64
+}
+
+macro wrap_signed_angle(x) {
+    x = x - (tau * floor((x + pi) * inv_tau))
+}
+
+process {
+    let a = 1.0f64 - (alpha[0] as f64)
+    var y = last_y
+
+    for i in 0 .. frames {
+        var d = (input[i] as f64) - y
+
+        // shortest signed angular delta.
+        @wrap_signed_angle(d)
+
+        y = y + (a * d)
+
+        // wrap output angle to [-pi, pi).
+        @wrap_signed_angle(y)
+
+        output[i] = y as f32
+    }
+
+    // snap to the most recent input when close enough.
+    if frames > 0 {
+        let last_i = frames - 1
+        let x = input[last_i] as f64
+
+        var d = x - y
+        @wrap_signed_angle(d)
+
+        if abs(d) <= snap {
+            y = x
+            @wrap_signed_angle(y)
+        }
+    }
+
+    last_y = y
+}
