@@ -34,8 +34,8 @@ Module (`0`). The source-bearing node types are:
 | `79` | DSP | Lua |
 | `82` | Lyte DSP | Lyte |
 
-For both types, PatchObject field `f10` is the source `string` and is always
-present in Audulus-authored output.
+For both types, PatchObject field `f10` holds the source `string`. An absent
+`f10` represents empty source.
 
 PatchObject field `f10` is also used by Text, Shader, and Canvas objects. Its
 presence alone does not identify a DSP source string; `f0` determines how it is
