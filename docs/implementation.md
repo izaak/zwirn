@@ -14,6 +14,8 @@ This document records implementation decisions as Zwirn develops. `docs/design.m
 
 PatchObject pool indexes identify distinct tables. This gives each node handle an independently rewritable object.
 
+Rewriting appends replacement strings and redirects existing `f10` offsets. Audulus accepts this layout and compacts superseded strings when it next saves the document.
+
 ## Synchronization state
 
 The synchronization-state representation is deferred until the surrounding inputs, outputs, and orchestration boundaries are established.
