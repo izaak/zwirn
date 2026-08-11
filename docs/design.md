@@ -1,8 +1,8 @@
 # Zwirn
 
-`zwirn` is a command-line tool for keeping source fragments on the filesystem synchronized with monolithic Lua and Lyte DSP source embedded in `.audulus4` files.
+`zwirn` is a command-line tool for keeping source fragments on the filesystem synchronized with monolithic Lua, Lyte, and GLSL source embedded in `.audulus4` files.
 
-Large DSP nodes can be composed from smaller files that remain convenient to edit, organize, and version in a source repository. The embedded source remains directly editable inside Audulus, and changes can flow in either direction.
+Large source-bearing nodes can be composed from smaller files that remain convenient to edit, organize, and version in a source repository. The embedded source remains directly editable inside Audulus, and changes can flow in either direction.
 
 ## Documents and source roots
 
@@ -14,7 +14,7 @@ The source root must exist and be a directory.
 
 ## Fragments
 
-Fragments are regions of embedded DSP source identified by Zwirn markers. Each fragment corresponds to one file beneath the source root. Its source-root-relative path is its identity.
+Fragments are regions of embedded source identified by Zwirn markers. Each fragment corresponds to one file beneath the source root. Its source-root-relative path is its identity.
 
 The general marker form is:
 
@@ -48,11 +48,19 @@ An absent hash marks an unadopted fragment:
 -- @} src/filter/svf.lua
 ```
 
-Authors seed fragments by placing unadopted markers in the appropriate DSP source inside Audulus.
+Authors seed fragments by placing unadopted markers in the appropriate source inside Audulus.
 
 ### Marker grammar
 
-A marker occupies an entire line, with optional leading indentation and trailing horizontal whitespace. Lua markers use `--` comments. Lyte markers use `//` comments. Horizontal whitespace separates the marker tokens, and paths contain no whitespace.
+A marker occupies an entire line, with optional leading indentation and trailing horizontal whitespace. The containing node determines its language and comment syntax:
+
+| Node type | Language | Comment |
+|---|---|---|
+| Canvas, DSP | Lua | `--` |
+| Shader | GLSL | `//` |
+| Lyte DSP | Lyte | `//` |
+
+Horizontal whitespace separates the marker tokens, and paths contain no whitespace.
 
 The path on a closing marker exactly matches the canonical path on its opening marker. A hash is the first 16 lowercase hexadecimal digits of the SHA-256 digest and appears only on a closing marker.
 
@@ -72,11 +80,11 @@ A fragment rename moves the source file and changes the path on both embedded ma
 
 ## Discovery
 
-Zwirn scans the source contents of every Lua and Lyte DSP node in the document. Lua and Lyte marker comments are recognized according to the language of the containing node.
+Zwirn scans the source contents of every Canvas, DSP, Shader, and Lyte DSP node in the document. Marker comments are recognized according to the language of the containing node.
 
 The discovered markers define the fragment inventory. Fragment paths are unique within the document and source root.
 
-Audulus node identity, graph position, hierarchy, and other node metadata are not part of fragment identity. A DSP node may move or receive a new Audulus identity while its marked fragments remain the same.
+Audulus node identity, graph position, hierarchy, and other node metadata are not part of fragment identity. A source-bearing node may move or receive a new Audulus identity while its marked fragments remain the same.
 
 ## Canonical source
 
@@ -132,7 +140,7 @@ Each output is prepared before replacement, and each destination is replaced ato
 
 External file replacements precede document replacement. The document is replaced after all planned external writes succeed. A later failure leaves committed external files in place and reports them.
 
-The document mutation set consists of fragment source and closing-marker hashes. Within DSP source strings, all other text is preserved exactly. All other logical document data remains unchanged.
+The document mutation set consists of fragment source and closing-marker hashes. Within source strings, all other text is preserved exactly. All other logical document data remains unchanged.
 
 Updating an existing hash replaces only its token. Establishing a hash inserts one separating space and the hash after the path on the closing marker. Existing marker indentation, comment spacing, token spacing, and trailing whitespace are preserved.
 
