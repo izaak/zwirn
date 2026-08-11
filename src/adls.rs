@@ -307,7 +307,7 @@ impl<'a> Document<'a> {
         let mut output = Vec::new();
         output
             .try_reserve_exact(planned_size)
-            .map_err(|_| Error::SizeLimitExceeded)?;
+            .map_err(|_| Error::AllocationFailed)?;
         output.extend_from_slice(self.bytes);
         for (field_location, replacement, replacement_length) in changes {
             let padding = (U32_SIZE - output.len() % U32_SIZE) % U32_SIZE;
@@ -366,6 +366,9 @@ pub enum Error {
 
     #[error("node handle {node} occurs more than once in the replacement batch")]
     DuplicateReplacement { node: NodeHandle },
+
+    #[error("memory could not be reserved for the rewritten ADLS buffer")]
+    AllocationFailed,
 
     #[error("the rewritten ADLS buffer would exceed Zwirn's 2^31-byte size limit")]
     SizeLimitExceeded,
