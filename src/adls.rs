@@ -9,6 +9,7 @@ use thiserror::Error;
 
 const FILE_IDENTIFIER: &[u8; 4] = b"ADLS";
 const HEADER_SIZE: usize = 8;
+const MAX_REWRITTEN_ADLS_SIZE: usize = 1_usize << 31;
 const U32_SIZE: usize = size_of::<u32>();
 const VTABLE_HEADER_SIZE: usize = 2 * size_of::<u16>();
 static NEXT_DOCUMENT_ID: AtomicU64 = AtomicU64::new(1);
@@ -149,6 +150,7 @@ impl<'a> Document<'a> {
 
         let mut sources = Vec::new();
         let mut source_field_locations = Vec::new();
+        let mut object_indexes = BTreeMap::new();
 
         for index in 0..object_count {
             let element_offset = index
@@ -162,6 +164,14 @@ impl<'a> Document<'a> {
             )?;
             let object_location =
                 parser.follow_uoffset(element_location, U32_SIZE, "patch object")?;
+            let pool_index = u32::try_from(index)
+                .map_err(|_| Error::malformed(element_location, "patch-object index"))?;
+            if let Some(first_index) = object_indexes.insert(object_location, pool_index) {
+                return Err(Error::DuplicatePatchObjectTable {
+                    first_index,
+                    second_index: pool_index,
+                });
+            }
             let object = parser.table(object_location, "patch object")?;
             layout.add_table(object, "patch object")?;
             let type_id = match object.field(&parser, 0, U32_SIZE, U32_SIZE, "patch object f0")? {
@@ -181,8 +191,7 @@ impl<'a> Document<'a> {
             };
 
             let handle = NodeHandle {
-                index: u32::try_from(index)
-                    .map_err(|_| Error::malformed(element_location, "patch-object index"))?,
+                index: pool_index,
                 document: document_id,
             };
             let source_location =
@@ -282,26 +291,26 @@ impl<'a> Document<'a> {
                 continue;
             }
             let field_location = self.source_field_locations[index];
-            changes.push((field_location, replacement));
+            let replacement_length =
+                u32::try_from(replacement.len()).map_err(|_| Error::SizeLimitExceeded)?;
+            changes.push((field_location, replacement, replacement_length));
         }
 
         if changes.is_empty() {
             return Ok(Cow::Borrowed(self.bytes));
         }
 
-        let mut output = self.bytes.to_vec();
-        for (field_location, replacement) in changes {
-            let replacement_length =
-                u32::try_from(replacement.len()).map_err(|_| Error::SizeLimitExceeded)?;
+        let planned_size = plan_rewrite_size(
+            self.bytes.len(),
+            changes.iter().map(|(_, replacement, _)| replacement.len()),
+        )?;
+        let mut output = Vec::new();
+        output
+            .try_reserve_exact(planned_size)
+            .map_err(|_| Error::SizeLimitExceeded)?;
+        output.extend_from_slice(self.bytes);
+        for (field_location, replacement, replacement_length) in changes {
             let padding = (U32_SIZE - output.len() % U32_SIZE) % U32_SIZE;
-            let required = padding
-                .checked_add(U32_SIZE)
-                .and_then(|size| size.checked_add(replacement.len()))
-                .and_then(|size| size.checked_add(1))
-                .ok_or(Error::SizeLimitExceeded)?;
-            output
-                .try_reserve(required)
-                .map_err(|_| Error::SizeLimitExceeded)?;
             output.resize(output.len() + padding, 0);
 
             let string_location = output.len();
@@ -315,6 +324,7 @@ impl<'a> Document<'a> {
             output[field_location..field_location + U32_SIZE]
                 .copy_from_slice(&relative_offset.to_le_bytes());
         }
+        debug_assert_eq!(output.len(), planned_size);
 
         // Keep construction and validation coupled: a successful rewrite is
         // guaranteed to be consumable by this same narrow view.
@@ -341,6 +351,9 @@ pub enum Error {
     #[error("the root table has no patch-object pool in f0")]
     MissingPatchObjectPool,
 
+    #[error("patch-object pool indexes {first_index} and {second_index} resolve to the same table")]
+    DuplicatePatchObjectTable { first_index: u32, second_index: u32 },
+
     #[error("source for node {node} is not valid UTF-8")]
     InvalidSourceUtf8 {
         node: NodeHandle,
@@ -354,7 +367,7 @@ pub enum Error {
     #[error("node handle {node} occurs more than once in the replacement batch")]
     DuplicateReplacement { node: NodeHandle },
 
-    #[error("the rewritten ADLS buffer would exceed FlatBuffers size limits")]
+    #[error("the rewritten ADLS buffer would exceed Zwirn's 2^31-byte size limit")]
     SizeLimitExceeded,
 }
 
@@ -362,6 +375,28 @@ impl Error {
     fn malformed(offset: usize, structure: &'static str) -> Self {
         Self::Malformed { offset, structure }
     }
+}
+
+fn plan_rewrite_size(
+    initial_size: usize,
+    replacement_lengths: impl IntoIterator<Item = usize>,
+) -> Result<usize, Error> {
+    if initial_size > MAX_REWRITTEN_ADLS_SIZE {
+        return Err(Error::SizeLimitExceeded);
+    }
+
+    let mut size = initial_size;
+    for replacement_length in replacement_lengths {
+        let padding = (U32_SIZE - size % U32_SIZE) % U32_SIZE;
+        size = size
+            .checked_add(padding)
+            .and_then(|size| size.checked_add(U32_SIZE))
+            .and_then(|size| size.checked_add(replacement_length))
+            .and_then(|size| size.checked_add(1))
+            .filter(|size| *size <= MAX_REWRITTEN_ADLS_SIZE)
+            .ok_or(Error::SizeLimitExceeded)?;
+    }
+    Ok(size)
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -663,5 +698,24 @@ impl Parser<'_> {
             return Err(Error::malformed(location, structure));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Error, MAX_REWRITTEN_ADLS_SIZE, plan_rewrite_size};
+
+    #[test]
+    fn plans_the_rewrite_size_at_the_limit_without_allocating_the_buffer() {
+        let aligned_initial_size = MAX_REWRITTEN_ADLS_SIZE - 8;
+
+        assert_eq!(
+            plan_rewrite_size(aligned_initial_size, [3]).unwrap(),
+            MAX_REWRITTEN_ADLS_SIZE
+        );
+        assert!(matches!(
+            plan_rewrite_size(aligned_initial_size, [4]),
+            Err(Error::SizeLimitExceeded)
+        ));
     }
 }

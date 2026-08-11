@@ -160,7 +160,6 @@ fn rejects_malformed_reached_structures_and_invalid_source_utf8() {
         (0x54, &u32::MAX.to_le_bytes()),
         (0x58, &0x84_u32.to_le_bytes()),
         (0x60, &u32::MAX.to_le_bytes()),
-        (0x68, &0x534_u32.to_le_bytes()),
         (0x532, &u16::MAX.to_le_bytes()),
         (0x532, &0x24_u16.to_le_bytes()),
         (0x604, &u32::MAX.to_le_bytes()),
@@ -211,6 +210,20 @@ fn rejects_malformed_reached_structures_and_invalid_source_utf8() {
     assert!(matches!(
         Document::parse(&missing_pool),
         Err(Error::MissingPatchObjectPool)
+    ));
+}
+
+#[test]
+fn reports_both_pool_indexes_for_a_repeated_patch_object_table() {
+    let mut repeated_table = SOURCE_TYPES.to_vec();
+    repeated_table[0x68..0x6c].copy_from_slice(&0x534_u32.to_le_bytes());
+
+    assert!(matches!(
+        Document::parse(&repeated_table),
+        Err(Error::DuplicatePatchObjectTable {
+            first_index: 2,
+            second_index: 4,
+        })
     ));
 }
 
