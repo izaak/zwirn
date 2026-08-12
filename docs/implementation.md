@@ -10,6 +10,8 @@ This document records implementation decisions as Zwirn develops. `docs/design.m
 
 `thiserror` derives typed validation and operational errors. Unresolved synchronization states are ordinary results.
 
+`tempfile` provides isolated workspaces for filesystem tests.
+
 ## Filesystem I/O
 
 Zwirn uses whole-file reads and prepares outputs in memory.
