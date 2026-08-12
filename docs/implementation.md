@@ -16,7 +16,9 @@ This document records implementation decisions as Zwirn develops. `docs/design.m
 
 Zwirn uses whole-file reads and prepares outputs in memory.
 
-Fragment uniqueness is determined solely by canonical marker path. Zwirn does not detect filesystem aliases.
+Fragment uniqueness is exact canonical marker-path equality. Distinct marker paths are otherwise independent. Zwirn does not compare resolved destinations or filesystem identities.
+
+Direct writes use ordinary platform file creation, truncation, and write semantics, including their effects on destination metadata.
 
 ## ADLS source fields
 

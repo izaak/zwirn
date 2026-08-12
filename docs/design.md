@@ -14,7 +14,7 @@ The source root defaults to the parent of the document path as named. An explici
 
 The source root must exist and be a directory.
 
-The document and source root form a trusted local workspace. Paths Zwirn reads or writes remain unchanged during a command.
+The document and source root form a trusted local workspace. The contents read during discovery define the command's inputs.
 
 ## Fragments
 
@@ -108,7 +108,8 @@ Let `F` be canonical filesystem source, `E` canonical embedded source, and `H` t
 | present | present | `E = H`, `F ≠ H` | `embed` | `embed` or `sync` |
 | present | present | `F = H`, `E ≠ H` | `extract` | `extract` or `sync` |
 | present | present | `F = E`, both differing from `H` | `converged` | any mutating command records the new `H` |
-| present | present | `F`, `E`, and `H` all differ | `conflict` | manual convergence or targeted forced `embed` or `extract` |
+| present | present | `F ≠ E`, `F = H`, `E = H` | `conflict` | manual convergence or targeted forced `embed` or `extract` |
+| present | present | `F ≠ E`, `F ≠ H`, `E ≠ H` | `conflict` | manual convergence or targeted forced `embed` or `extract` |
 
 A successful action records the hash of the synchronized canonical source in the closing marker.
 
@@ -146,9 +147,9 @@ The prepared document passes ADLS and marker parsing before writing. A command p
 
 ## Reporting
 
-Results are ordered by canonical fragment path.
+Results are ordered by canonical fragment path and written one per line as `PATH<TAB>RESULT`.
 
-Mutating commands report each action performed and every unresolved state.
+`status` results are synchronization states. Mutating-command results are performed actions (`record`, `embed`, or `extract`) and unresolved states.
 
 Exit code `0` means every selected fragment is synchronized after the command.
 
