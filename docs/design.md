@@ -4,17 +4,21 @@
 
 Large source-bearing nodes can be composed from smaller files that remain convenient to edit, organize, and version in a source repository. The embedded source remains directly editable inside Audulus, and changes can flow in either direction.
 
+Zwirn supports macOS and Linux.
+
 ## Documents and source roots
 
 Each invocation operates on one explicitly named `.audulus4` document and one source root.
 
-The source root defaults to the directory containing the document. An explicit `--source-root` may be absolute or relative. The document path and an explicit relative source root are resolved from the current working directory.
+The source root defaults to the parent of the document path as named. An explicit `--source-root` may be absolute or relative. The document path and an explicit relative source root are resolved from the current working directory.
 
 The source root must exist and be a directory.
 
+The document and source root form a trusted local workspace. Distinct marker paths name distinct files, and paths Zwirn reads or writes remain unchanged during a command.
+
 ## Fragments
 
-Fragments are regions of embedded source identified by Zwirn markers. Each fragment corresponds to one file beneath the source root. Its source-root-relative path is its identity.
+Fragments are regions of embedded source identified by Zwirn markers. Each fragment corresponds to one source file. Its marker path is its identity.
 
 The general marker form is:
 
@@ -72,11 +76,7 @@ Fragment source is the complete sequence of lines strictly between its marker li
 
 Marker paths are nonempty, use `/` separators, and have canonical relative form. A canonical path has no leading slash, backslash, empty segment, `.` or `..` segment, or trailing slash.
 
-A referenced path remains beneath the canonical source root. Its existing components are ordinary directories rather than symbolic links. An existing target is a regular file. File creation may create missing parent directories beneath the source root.
-
-Distinct marker paths identify distinct filesystem entries. Filesystem aliases, including case-folding aliases, are duplicate-path errors.
-
-A fragment rename moves the source file and changes the path on both embedded markers.
+A canonical fragment path is resolved relative to the source root. An existing target is a regular file. File creation may create missing parent directories.
 
 ## Discovery
 
@@ -130,23 +130,19 @@ Synchronization commands create and replace source content. Deletion is outside 
 
 ## Validation
 
-Discovery and validation complete before writes begin. Validation covers the document structure, marker structure, hashes, source encoding, source-root paths, filesystem targets, fragment uniqueness, and command selectors.
+Discovery and validation complete before writes begin. Validation covers document structure, marker structure, hashes, source encoding, source-root validity, canonical fragment paths, existing fragment-target types, fragment uniqueness, and command selectors.
 
 A validation failure aborts the command before writing. Selected fragments with ordinary unresolved states are processed independently, allowing safe actions to proceed alongside conflicts, missing files, and states belonging to the opposite direction.
 
 ## Writes
 
-Each output is prepared before replacement, and each destination is replaced atomically.
-
-External file replacements precede document replacement. The document is replaced after all planned external writes succeed. A later failure leaves committed external files in place and reports them.
+All outputs are prepared before writing. External files are written directly in canonical fragment-path order, followed by the document. Writes stop at the first I/O failure. The current destination may be partially written; completed writes and created directories remain in place.
 
 The document mutation set consists of fragment source and closing-marker hashes. Within source strings, all other text is preserved exactly. All other logical document data remains unchanged.
 
 Updating an existing hash replaces only its token. Establishing a hash inserts one separating space and the hash after the path on the closing marker. Existing marker indentation, comment spacing, token spacing, and trailing whitespace are preserved.
 
-The completed document is parsed successfully before atomic replacement and retains the original document's filesystem permissions. A command producing no document change leaves the document file untouched.
-
-Implementations should verify that inputs remain unchanged between discovery and writing, aborting if a change is detected.
+The completed document is parsed successfully before writing. A command producing no document change leaves the document file untouched.
 
 ## Reporting
 

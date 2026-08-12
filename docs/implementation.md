@@ -10,6 +10,12 @@ This document records implementation decisions as Zwirn develops. `docs/design.m
 
 `thiserror` derives typed validation and operational errors. Unresolved synchronization states are ordinary results.
 
+## Filesystem I/O
+
+Zwirn uses whole-file reads and prepares outputs in memory.
+
+Fragment uniqueness is determined solely by canonical marker path. Zwirn does not detect filesystem aliases.
+
 ## ADLS source fields
 
 PatchObject pool indexes identify distinct tables. This gives each node handle an independently rewritable object.
