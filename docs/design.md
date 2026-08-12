@@ -14,7 +14,7 @@ The source root defaults to the parent of the document path as named. An explici
 
 The source root must exist and be a directory.
 
-The document and source root form a trusted local workspace. Distinct marker paths name distinct files, and paths Zwirn reads or writes remain unchanged during a command.
+The document and source root form a trusted local workspace. Paths Zwirn reads or writes remain unchanged during a command.
 
 ## Fragments
 
@@ -82,7 +82,7 @@ A canonical fragment path is resolved relative to the source root. An existing t
 
 Zwirn scans the source contents of every Canvas, DSP, Shader, and Lyte DSP node in the document. Marker comments are recognized according to the language of the containing node.
 
-The discovered markers define the fragment inventory. Fragment paths are unique within the document and source root.
+The discovered markers define the fragment inventory. Marker paths are unique within the document.
 
 Audulus node identity, graph position, hierarchy, and other node metadata are not part of fragment identity. A source-bearing node may move or receive a new Audulus identity while its marked fragments remain the same.
 
@@ -103,7 +103,7 @@ Let `F` be canonical filesystem source, `E` canonical embedded source, and `H` t
 | absent | absent | — | `unadopted` | `sync` or `extract` creates `F` and records `H` |
 | absent | present | `F = E` | `unadopted` | any mutating command records `H` |
 | absent | present | `F ≠ E` | `unadopted conflict` | targeted forced `embed` or `extract` |
-| present | absent | — | `missing` | targeted `extract` recreates `F` |
+| present | absent | — | `missing` | `extract` with an explicit path recreates `F` |
 | present | present | `F = E = H` | `synchronized` | none |
 | present | present | `E = H`, `F ≠ H` | `embed` | `embed` or `sync` |
 | present | present | `F = H`, `E ≠ H` | `extract` | `extract` or `sync` |
@@ -142,7 +142,7 @@ The document mutation set consists of fragment source and closing-marker hashes.
 
 Updating an existing hash replaces only its token. Establishing a hash inserts one separating space and the hash after the path on the closing marker. Existing marker indentation, comment spacing, token spacing, and trailing whitespace are preserved.
 
-The completed document is parsed successfully before writing. A command producing no document change leaves the document file untouched.
+The prepared document passes ADLS and marker parsing before writing. A command producing no document change leaves the document file untouched.
 
 ## Reporting
 
