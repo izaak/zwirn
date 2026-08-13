@@ -137,7 +137,7 @@ A validation failure aborts the command before writing. Selected fragments with 
 
 ## Writes
 
-All outputs are prepared before writing. External files are written directly in canonical fragment-path order, followed by the document. Writes stop at the first I/O failure. The current destination may be partially written; completed writes and created directories remain in place.
+All outputs are prepared before writing. External files are written directly in canonical fragment-path order, followed by the document. A fragment target absent during discovery is created exclusively, and its write fails if a filesystem entry occupies that path. Targets present during discovery use ordinary create-or-truncate behavior. Writes stop at the first I/O failure. The current destination may be partially written; completed writes and created directories remain in place.
 
 The document mutation set consists of fragment source and closing-marker hashes. Within source strings, all other text is preserved exactly. All other logical document data remains unchanged.
 

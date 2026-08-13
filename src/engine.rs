@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::adls::{Document, NodeHandle};
-use crate::commit::{self, DocumentOutput, ExternalOutput};
+use crate::commit::{self, DocumentOutput, ExternalOutput, ExternalWrite};
 use crate::fragment::{
     FragmentPath, FragmentUpdate, ParsedSource, RewriteError as FragmentRewriteError,
 };
@@ -236,6 +236,11 @@ fn mutate(
             path: &entry.path,
             destination: &entry.target,
             bytes: entry.embedded.as_str().as_bytes(),
+            write: if entry.filesystem.is_none() {
+                ExternalWrite::CreateNew
+            } else {
+                ExternalWrite::CreateOrTruncate
+            },
         })
         .collect::<Vec<_>>();
     let document = document_output.as_deref().map(|bytes| DocumentOutput {

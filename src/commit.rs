@@ -2,19 +2,27 @@
 
 use std::error::Error;
 use std::fmt;
-use std::fs;
-use std::io;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
 use crate::fragment::FragmentPath;
 
+/// How a prepared external output opens its destination.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExternalWrite {
+    CreateNew,
+    CreateOrTruncate,
+}
+
 /// A fully prepared external fragment output.
 pub struct ExternalOutput<'a> {
     pub path: &'a FragmentPath,
     pub destination: &'a Path,
     pub bytes: &'a [u8],
+    pub write: ExternalWrite,
 }
 
 /// A fully prepared document output.
@@ -54,7 +62,7 @@ fn commit_with<F: CommitFilesystem>(
             }
             .after(completed));
         }
-        if let Err(source) = filesystem.write(output.destination, output.bytes) {
+        if let Err(source) = filesystem.write(output.destination, output.bytes, output.write) {
             return Err(CommitFailure::WriteExternal {
                 path: output.path.clone(),
                 destination: output.destination.to_owned(),
@@ -66,7 +74,11 @@ fn commit_with<F: CommitFilesystem>(
     }
 
     if let Some(document) = document
-        && let Err(source) = filesystem.write(document.destination, document.bytes)
+        && let Err(source) = filesystem.write(
+            document.destination,
+            document.bytes,
+            ExternalWrite::CreateOrTruncate,
+        )
     {
         return Err(CommitFailure::WriteDocument {
             destination: document.destination.to_owned(),
@@ -97,7 +109,7 @@ fn nonempty_parent(path: &Path) -> Option<&Path> {
 
 trait CommitFilesystem {
     fn create_dir_all(&mut self, path: &Path) -> io::Result<()>;
-    fn write(&mut self, path: &Path, bytes: &[u8]) -> io::Result<()>;
+    fn write(&mut self, path: &Path, bytes: &[u8], write: ExternalWrite) -> io::Result<()>;
 }
 
 struct RealFilesystem;
@@ -107,8 +119,15 @@ impl CommitFilesystem for RealFilesystem {
         fs::create_dir_all(path)
     }
 
-    fn write(&mut self, path: &Path, bytes: &[u8]) -> io::Result<()> {
-        fs::write(path, bytes)
+    fn write(&mut self, path: &Path, bytes: &[u8], write: ExternalWrite) -> io::Result<()> {
+        match write {
+            ExternalWrite::CreateNew => OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)?
+                .write_all(bytes),
+            ExternalWrite::CreateOrTruncate => fs::write(path, bytes),
+        }
     }
 }
 
@@ -229,11 +248,13 @@ mod tests {
                 path: &a,
                 destination: &existing,
                 bytes: b"new a\n",
+                write: ExternalWrite::CreateOrTruncate,
             },
             ExternalOutput {
                 path: &b,
                 destination: &missing,
                 bytes: b"new b\n",
+                write: ExternalWrite::CreateNew,
             },
         ];
 
@@ -252,6 +273,40 @@ mod tests {
     }
 
     #[test]
+    fn exclusive_creation_refuses_an_occupied_destination_before_the_document() {
+        let workspace = tempfile::tempdir().unwrap();
+        let occupied = workspace.path().join("fragment.lua");
+        let document = workspace.path().join("patch.audulus4");
+        fs::write(&occupied, b"appeared after discovery").unwrap();
+        fs::write(&document, b"old document").unwrap();
+
+        let path = FragmentPath::try_from("fragment.lua").unwrap();
+        let external = [ExternalOutput {
+            path: &path,
+            destination: &occupied,
+            bytes: b"prepared fragment\n",
+            write: ExternalWrite::CreateNew,
+        }];
+
+        let error = commit(
+            &external,
+            Some(DocumentOutput {
+                destination: &document,
+                bytes: b"new document",
+            }),
+        )
+        .unwrap_err();
+
+        assert!(error.completed().is_empty());
+        assert!(matches!(
+            error.failure(),
+            CommitFailure::WriteExternal { path: failed, .. } if failed == &path
+        ));
+        assert_eq!(fs::read(occupied).unwrap(), b"appeared after discovery");
+        assert_eq!(fs::read(document).unwrap(), b"old document");
+    }
+
+    #[test]
     fn stops_in_canonical_order_and_reports_only_completed_external_writes() {
         let a_destination = Path::new("out/a");
         let b_destination = Path::new("out/b");
@@ -264,16 +319,19 @@ mod tests {
                 path: &a,
                 destination: a_destination,
                 bytes: b"a",
+                write: ExternalWrite::CreateOrTruncate,
             },
             ExternalOutput {
                 path: &b,
                 destination: b_destination,
                 bytes: b"b",
+                write: ExternalWrite::CreateOrTruncate,
             },
             ExternalOutput {
                 path: &c,
                 destination: c_destination,
                 bytes: b"c",
+                write: ExternalWrite::CreateOrTruncate,
             },
         ];
         let mut filesystem = RecordingFilesystem {
@@ -308,11 +366,13 @@ mod tests {
                 path: &b,
                 destination: Path::new("b"),
                 bytes: b"b",
+                write: ExternalWrite::CreateOrTruncate,
             },
             ExternalOutput {
                 path: &a,
                 destination: Path::new("a"),
                 bytes: b"a",
+                write: ExternalWrite::CreateOrTruncate,
             },
         ];
         let mut filesystem = RecordingFilesystem {
@@ -340,11 +400,13 @@ mod tests {
                 path: &a,
                 destination: Path::new("a"),
                 bytes: b"a",
+                write: ExternalWrite::CreateOrTruncate,
             },
             ExternalOutput {
                 path: &b,
                 destination: Path::new("b"),
                 bytes: b"b",
+                write: ExternalWrite::CreateOrTruncate,
             },
         ];
         let mut filesystem = RecordingFilesystem {
@@ -390,7 +452,7 @@ mod tests {
             Ok(())
         }
 
-        fn write(&mut self, path: &Path, _bytes: &[u8]) -> io::Result<()> {
+        fn write(&mut self, path: &Path, _bytes: &[u8], _write: ExternalWrite) -> io::Result<()> {
             self.record("write", path);
             if self.fail_write.as_deref() == Some(path) {
                 return Err(io::Error::other("injected failure"));
