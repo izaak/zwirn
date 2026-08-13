@@ -104,6 +104,60 @@ fn validates_every_existing_target_before_selection() {
     ));
 }
 
+#[cfg(unix)]
+#[test]
+fn fifo_target_is_rejected_before_opening_can_block() {
+    use std::process::Command;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    let workspace = tempdir().unwrap();
+    let fifo = workspace.path().join("target.lua");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let document =
+        document_with_sources(["-- @{ target.lua\nembedded\n-- @} target.lua\n", "", "", ""]);
+
+    // Release a blocking FIFO open after the deadline so a regression fails
+    // promptly instead of hanging the test process.
+    let (cancel_release, release_cancelled) = mpsc::channel();
+    let release_fifo = fifo.clone();
+    let release = thread::spawn(move || {
+        if release_cancelled
+            .recv_timeout(Duration::from_secs(2))
+            .is_err()
+        {
+            fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(release_fifo)
+                .unwrap();
+        }
+    });
+
+    let started = Instant::now();
+    let result = Inventory::discover(document, workspace.path());
+    let elapsed = started.elapsed();
+    let _ = cancel_release.send(());
+    release.join().unwrap();
+
+    assert!(matches!(
+        result,
+        Err(InventoryError::TargetNotRegular { path, .. })
+            if path.as_str() == "target.lua"
+    ));
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "FIFO validation blocked for {elapsed:?}"
+    );
+}
+
 #[test]
 fn source_root_must_exist_and_be_a_directory() {
     let workspace = tempdir().unwrap();

@@ -279,6 +279,24 @@ fn read_optional_target(
     path: &FragmentPath,
     target: &Path,
 ) -> Result<Option<ExistingInput>, InventoryError> {
+    let metadata = match source_root.metadata(relative_path(path)) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(InventoryError::TargetAccess {
+                path: path.clone(),
+                target: target.to_path_buf(),
+                source,
+            });
+        }
+    };
+    if !metadata.is_file() {
+        return Err(InventoryError::TargetNotRegular {
+            path: path.clone(),
+            target: target.to_path_buf(),
+        });
+    }
+
     let mut file = match source_root.open_target(path) {
         Ok(file) => file,
         Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
