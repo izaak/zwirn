@@ -28,4 +28,6 @@ Rewriting appends replacement strings and redirects existing `f10` offsets. Audu
 
 ## Synchronization state
 
-The synchronization-state representation is deferred until the surrounding inputs, outputs, and orchestration boundaries are established.
+Classification distinguishes absent-file and matching-file forms of observable `unadopted` state because their safe actions differ. Unequal sources that both match the truncated baseline hash are treated conservatively as a conflict.
+
+Command planning is pure. A forced selection is validated as a complete batch before actions are materialized.
