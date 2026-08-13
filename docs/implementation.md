@@ -31,3 +31,7 @@ Rewriting appends replacement strings and redirects existing `f10` offsets. Audu
 Classification distinguishes absent-file and matching-file forms of observable `unadopted` state because their safe actions differ. Unequal sources that both match the truncated baseline hash are treated conservatively as a conflict.
 
 Command planning is pure. A forced selection is validated as a complete batch before actions are materialized.
+
+## Command reporting
+
+Results are path-first, tab-separated lines. Mutating commands omit already synchronized fragments and use `record`, `embed`, and `extract` for performed actions. Diagnostics use standard error.
