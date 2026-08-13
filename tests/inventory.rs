@@ -140,6 +140,33 @@ fn regular_file_symlink_targets_follow_trusted_workspace_paths() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn distinct_fragment_paths_cannot_alias_the_same_existing_file() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = tempdir().unwrap();
+    fs::write(workspace.path().join("real.lua"), b"source\n").unwrap();
+    symlink("real.lua", workspace.path().join("linked.lua")).unwrap();
+    let document = document_with_sources([
+        concat!(
+            "-- @{ linked.lua\nsource\n-- @} linked.lua\n",
+            "-- @{ real.lua\nsource\n-- @} real.lua\n",
+        ),
+        "",
+        "",
+        "",
+    ]);
+
+    assert!(matches!(
+        Inventory::discover(document, workspace.path()),
+        Err(InventoryError::AliasedTargets {
+            first_path,
+            second_path,
+        }) if first_path.as_str() == "linked.lua" && second_path.as_str() == "real.lua"
+    ));
+}
+
 fn document_with_sources(sources: [&str; 4]) -> Vec<u8> {
     let document = Document::parse(SOURCE_TYPES).unwrap();
     let replacements = document

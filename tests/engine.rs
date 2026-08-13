@@ -229,6 +229,41 @@ fn rejects_a_fragment_target_lexically_equal_to_the_document() {
     assert_eq!(fs::read(document_path).unwrap(), document_bytes);
 }
 
+#[test]
+fn rejects_a_fragment_target_identifying_the_document_file() {
+    let workspace = tempdir().unwrap();
+    let document_bytes = document_with_sources([
+        "-- @{ document-alias.audulus4\nsource\n-- @} document-alias.audulus4\n",
+        "",
+        "",
+        "",
+    ]);
+    let document_path = workspace.path().join("patch.audulus4");
+    fs::write(&document_path, &document_bytes).unwrap();
+    fs::hard_link(
+        &document_path,
+        workspace.path().join("document-alias.audulus4"),
+    )
+    .unwrap();
+
+    let error = execute(Request {
+        cwd: workspace.path(),
+        document: Path::new("patch.audulus4"),
+        source_root: None,
+        selectors: &[],
+        mode: Mode::Status,
+    })
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        Error::Inventory(InventoryError::DocumentTarget { path, target })
+            if path.as_str() == "document-alias.audulus4"
+                && target == workspace.path().join("document-alias.audulus4")
+    ));
+    assert_eq!(fs::read(document_path).unwrap(), document_bytes);
+}
+
 fn source(value: &str) -> CanonicalSource {
     CanonicalSource::try_from(value).unwrap()
 }

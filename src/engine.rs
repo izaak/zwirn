@@ -3,8 +3,6 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
-use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -84,12 +82,7 @@ impl ExitState {
 /// Executes one complete Zwirn request.
 pub fn execute(request: Request<'_>) -> Result<Report, Error> {
     let paths = resolve_paths(request.cwd, request.document, request.source_root)?;
-    let document_bytes = fs::read(&paths.document).map_err(|source| Error::DocumentInput {
-        path: paths.document.clone(),
-        source,
-    })?;
-    let inventory =
-        Inventory::discover_for_document(document_bytes, &paths.source_root, &paths.document)?;
+    let inventory = Inventory::discover_for_document(&paths.source_root, &paths.document)?;
 
     let selection = if request.selectors.is_empty() {
         SelectionKind::All
@@ -340,13 +333,6 @@ fn map_plan_error(error: PlanError, classified: &[(&InventoryEntry, Classificati
 pub enum Error {
     #[error("document path `{}` does not have the `.audulus4` extension", path.display())]
     InvalidDocumentExtension { path: PathBuf },
-
-    #[error("cannot read Audulus document `{}`: {source}", path.display())]
-    DocumentInput {
-        path: PathBuf,
-        #[source]
-        source: io::Error,
-    },
 
     #[error(transparent)]
     Inventory(#[from] crate::inventory::InventoryError),

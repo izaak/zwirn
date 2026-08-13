@@ -1,8 +1,9 @@
 //! Owned fragment discovery from one read of each filesystem input.
 
-use std::collections::BTreeSet;
-use std::fs;
-use std::io;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::{self, File};
+use std::io::{self, Read};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::str::Utf8Error;
 
@@ -30,17 +31,21 @@ impl Inventory {
     }
 
     pub(crate) fn discover_for_document(
-        document_bytes: Vec<u8>,
         source_root: &Path,
         document_path: &Path,
     ) -> Result<Self, InventoryError> {
-        Self::discover_inner(document_bytes, source_root, Some(document_path))
+        let document = read_document(document_path)?;
+        let origin = DocumentOrigin {
+            path: document_path,
+            identity: document.identity,
+        };
+        Self::discover_inner(document.bytes, source_root, Some(origin))
     }
 
     fn discover_inner(
         document_bytes: Vec<u8>,
         source_root: &Path,
-        document_path: Option<&Path>,
+        document_origin: Option<DocumentOrigin<'_>>,
     ) -> Result<Self, InventoryError> {
         let source_root = source_root.to_path_buf();
         validate_source_root(&source_root).map_err(|source| InventoryError::SourceRoot {
@@ -80,20 +85,35 @@ impl Inventory {
         validate_uniqueness(&discovered)?;
 
         let mut entries = Vec::with_capacity(discovered.len());
+        let mut target_identities = BTreeMap::<FileIdentity, FragmentPath>::new();
         for fragment in discovered {
             validate_parents(&source_root, &fragment.path)?;
             let target = target_path(&source_root, &fragment.path);
-            if document_path == Some(target.as_path()) {
+            if document_origin.is_some_and(|document| document.path == target) {
                 return Err(InventoryError::DocumentTarget {
                     path: fragment.path,
                     target,
                 });
             }
-            let target_bytes = read_optional_target(&fragment.path, &target)?;
-            let filesystem = match target_bytes.as_deref() {
+            let target_input = read_optional_target(&fragment.path, &target)?;
+            let filesystem = match target_input {
                 None => None,
-                Some(bytes) => {
-                    let text = std::str::from_utf8(bytes).map_err(|source| {
+                Some(input) => {
+                    if document_origin.is_some_and(|document| document.identity == input.identity) {
+                        return Err(InventoryError::DocumentTarget {
+                            path: fragment.path,
+                            target,
+                        });
+                    }
+                    if let Some(first_path) = target_identities.get(&input.identity) {
+                        return Err(InventoryError::AliasedTargets {
+                            first_path: first_path.clone(),
+                            second_path: fragment.path,
+                        });
+                    }
+                    target_identities.insert(input.identity, fragment.path.clone());
+
+                    let text = std::str::from_utf8(&input.bytes).map_err(|source| {
                         InventoryError::InvalidTargetUtf8 {
                             path: fragment.path.clone(),
                             target: target.clone(),
@@ -177,6 +197,32 @@ struct DiscoveredFragment {
     baseline: Option<BaselineHash>,
 }
 
+#[derive(Clone, Copy)]
+struct DocumentOrigin<'a> {
+    path: &'a Path,
+    identity: FileIdentity,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct FileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+impl FileIdentity {
+    fn from_metadata(metadata: &fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        }
+    }
+}
+
+struct ExistingInput {
+    bytes: Vec<u8>,
+    identity: FileIdentity,
+}
+
 fn validate_uniqueness(discovered: &[DiscoveredFragment]) -> Result<(), InventoryError> {
     for pair in discovered.windows(2) {
         if pair[0].path == pair[1].path {
@@ -241,7 +287,7 @@ fn validate_optional_directory(path: &Path) -> Result<(), io::Error> {
 fn read_optional_target(
     path: &FragmentPath,
     target: &Path,
-) -> Result<Option<Vec<u8>>, InventoryError> {
+) -> Result<Option<ExistingInput>, InventoryError> {
     let metadata = match fs::metadata(target) {
         Ok(metadata) => metadata,
         Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -259,18 +305,67 @@ fn read_optional_target(
             target: target.to_path_buf(),
         });
     }
-    fs::read(target)
-        .map(Some)
+
+    let mut file = File::open(target).map_err(|source| InventoryError::TargetRead {
+        path: path.clone(),
+        target: target.to_path_buf(),
+        source,
+    })?;
+    let metadata = file
+        .metadata()
+        .map_err(|source| InventoryError::TargetAccess {
+            path: path.clone(),
+            target: target.to_path_buf(),
+            source,
+        })?;
+    if !metadata.is_file() {
+        return Err(InventoryError::TargetNotRegular {
+            path: path.clone(),
+            target: target.to_path_buf(),
+        });
+    }
+    let identity = FileIdentity::from_metadata(&metadata);
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
         .map_err(|source| InventoryError::TargetRead {
             path: path.clone(),
             target: target.to_path_buf(),
             source,
-        })
+        })?;
+    Ok(Some(ExistingInput { bytes, identity }))
+}
+
+fn read_document(path: &Path) -> Result<ExistingInput, InventoryError> {
+    let mut file = File::open(path).map_err(|source| InventoryError::DocumentInput {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let metadata = file
+        .metadata()
+        .map_err(|source| InventoryError::DocumentInput {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let identity = FileIdentity::from_metadata(&metadata);
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|source| InventoryError::DocumentInput {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    Ok(ExistingInput { bytes, identity })
 }
 
 /// A discovery or filesystem-validation failure.
 #[derive(Debug, Error)]
 pub enum InventoryError {
+    #[error("cannot read Audulus document `{}`: {source}", path.display())]
+    DocumentInput {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
     #[error("source root `{}` is not an accessible directory: {source}", path.display())]
     SourceRoot {
         path: PathBuf,
@@ -308,6 +403,12 @@ pub enum InventoryError {
 
     #[error("fragment `{path}` targets the Audulus document `{}`", target.display())]
     DocumentTarget { path: FragmentPath, target: PathBuf },
+
+    #[error("fragments `{first_path}` and `{second_path}` target the same existing file")]
+    AliasedTargets {
+        first_path: FragmentPath,
+        second_path: FragmentPath,
+    },
 
     #[error("cannot validate parent `{}` for fragment `{path}`: {source}", parent.display())]
     FragmentParent {
