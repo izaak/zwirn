@@ -20,7 +20,6 @@ pub(crate) enum ExternalWrite {
 /// A fully prepared external fragment output.
 pub(crate) struct ExternalOutput<'a> {
     pub path: &'a FragmentPath,
-    pub destination: &'a Path,
     pub bytes: &'a [u8],
     pub write: ExternalWrite,
 }
@@ -65,7 +64,7 @@ fn commit_with<F: CommitFilesystem>(
         {
             return Err(CommitFailure::CreateExternalParent {
                 path: output.path.clone(),
-                destination: output.destination.to_owned(),
+                destination: filesystem.external_destination(output.path),
                 source,
             }
             .after(completed));
@@ -80,7 +79,7 @@ fn commit_with<F: CommitFilesystem>(
             Err(source) => {
                 return Err(CommitFailure::WriteExternal {
                     path: output.path.clone(),
-                    destination: output.destination.to_owned(),
+                    destination: filesystem.external_destination(output.path),
                     source,
                 }
                 .after(completed));
@@ -128,6 +127,7 @@ fn nonempty_parent(path: &Path) -> Option<&Path> {
 }
 
 trait CommitFilesystem {
+    fn external_destination(&self, path: &FragmentPath) -> PathBuf;
     fn create_dir_all(&mut self, path: &Path) -> io::Result<()>;
     fn write_external(
         &mut self,
@@ -144,6 +144,10 @@ struct RealFilesystem<'a> {
 }
 
 impl CommitFilesystem for RealFilesystem<'_> {
+    fn external_destination(&self, path: &FragmentPath) -> PathBuf {
+        self.source_root.named_path(relative_path(path))
+    }
+
     fn create_dir_all(&mut self, path: &Path) -> io::Result<()> {
         self.source_root.create_dir_all(path)
     }
@@ -293,13 +297,11 @@ mod tests {
         let external = [
             ExternalOutput {
                 path: &a,
-                destination: &existing,
                 bytes: b"new a\n",
                 write: ExternalWrite::CreateOrTruncate,
             },
             ExternalOutput {
                 path: &b,
-                destination: &missing,
                 bytes: b"new b\n",
                 write: ExternalWrite::CreateNew,
             },
@@ -333,7 +335,6 @@ mod tests {
         let path = FragmentPath::try_from("fragment.lua").unwrap();
         let external = [ExternalOutput {
             path: &path,
-            destination: &occupied,
             bytes: b"prepared fragment\n",
             write: ExternalWrite::CreateNew,
         }];
@@ -352,7 +353,11 @@ mod tests {
         assert!(error.completed().is_empty());
         assert!(matches!(
             error.failure(),
-            CommitFailure::WriteExternal { path: failed, .. } if failed == &path
+            CommitFailure::WriteExternal {
+                path: failed,
+                destination,
+                ..
+            } if failed == &path && destination == &occupied
         ));
         assert_eq!(fs::read(occupied).unwrap(), b"appeared after discovery");
         assert_eq!(fs::read(document).unwrap(), b"old document");
@@ -378,17 +383,14 @@ mod tests {
         let safe = FragmentPath::try_from("a-safe.lua").unwrap();
         let escape = FragmentPath::try_from("z-escape/target.lua").unwrap();
         let safe_destination = root_path.join(safe.as_str());
-        let escape_destination = root_path.join(escape.as_str());
         let external = [
             ExternalOutput {
                 path: &safe,
-                destination: &safe_destination,
                 bytes: b"safe\n",
                 write: ExternalWrite::CreateNew,
             },
             ExternalOutput {
                 path: &escape,
-                destination: &escape_destination,
                 bytes: b"escaped\n",
                 write: ExternalWrite::CreateOrTruncate,
             },
@@ -419,28 +421,23 @@ mod tests {
 
     #[test]
     fn stops_in_canonical_order_and_reports_only_completed_external_writes() {
-        let a_destination = Path::new("out/a");
         let b_destination = Path::new("out/b");
-        let c_destination = Path::new("out/c");
         let a = FragmentPath::try_from("out/a").unwrap();
         let b = FragmentPath::try_from("out/b").unwrap();
         let c = FragmentPath::try_from("out/c").unwrap();
         let external = [
             ExternalOutput {
                 path: &a,
-                destination: a_destination,
                 bytes: b"a",
                 write: ExternalWrite::CreateOrTruncate,
             },
             ExternalOutput {
                 path: &b,
-                destination: b_destination,
                 bytes: b"b",
                 write: ExternalWrite::CreateOrTruncate,
             },
             ExternalOutput {
                 path: &c,
-                destination: c_destination,
                 bytes: b"c",
                 write: ExternalWrite::CreateOrTruncate,
             },
@@ -475,13 +472,11 @@ mod tests {
         let external = [
             ExternalOutput {
                 path: &b,
-                destination: Path::new("b"),
                 bytes: b"b",
                 write: ExternalWrite::CreateOrTruncate,
             },
             ExternalOutput {
                 path: &a,
-                destination: Path::new("a"),
                 bytes: b"a",
                 write: ExternalWrite::CreateOrTruncate,
             },
@@ -509,13 +504,11 @@ mod tests {
         let external = [
             ExternalOutput {
                 path: &a,
-                destination: Path::new("a"),
                 bytes: b"a",
                 write: ExternalWrite::CreateOrTruncate,
             },
             ExternalOutput {
                 path: &b,
-                destination: Path::new("b"),
                 bytes: b"b",
                 write: ExternalWrite::CreateOrTruncate,
             },
@@ -568,6 +561,10 @@ mod tests {
     }
 
     impl CommitFilesystem for RecordingFilesystem {
+        fn external_destination(&self, path: &FragmentPath) -> PathBuf {
+            relative_path(path).to_owned()
+        }
+
         fn create_dir_all(&mut self, path: &Path) -> io::Result<()> {
             self.record("mkdir", path);
             Ok(())

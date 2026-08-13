@@ -234,7 +234,6 @@ fn mutate(
         .iter()
         .map(|entry| ExternalOutput {
             path: &entry.path,
-            destination: &entry.target,
             bytes: entry.embedded.as_str().as_bytes(),
             write: if entry.filesystem.is_none() {
                 ExternalWrite::CreateNew
