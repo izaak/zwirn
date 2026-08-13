@@ -18,6 +18,8 @@ Zwirn uses whole-file reads and prepares outputs in memory.
 
 Fragment uniqueness is exact canonical marker-path equality. During discovery, Zwirn compares the device and inode of the opened document and existing fragment targets to reject aliases among managed inputs. These identities are discarded after discovery and are not revalidated before writing. Directory identities and absent fragment targets are not compared.
 
+The lexical document-target check overlaps with identity comparison when a target is named exactly as the document. It remains as the direct expression of the named-path rule; identity comparison additionally detects aliases.
+
 Existing fragment targets and the document use ordinary platform create-or-truncate writes. Fragment targets absent during discovery use exclusive creation. Both use ordinary platform write behavior, including its effects on destination metadata.
 
 ## ADLS source fields
