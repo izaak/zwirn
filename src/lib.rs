@@ -4,3 +4,4 @@ pub mod engine;
 pub mod fragment;
 pub mod inventory;
 pub mod reconcile;
+mod source_root;

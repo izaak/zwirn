@@ -247,7 +247,7 @@ fn mutate(
         destination: document_path,
         bytes,
     });
-    commit::commit(&external, document)?;
+    commit::commit(inventory.source_root(), &external, document)?;
 
     Ok(Report {
         entries: report_entries,

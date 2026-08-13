@@ -1,22 +1,25 @@
 //! Owned fragment discovery from one read of each filesystem input.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{self, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::str::Utf8Error;
 
+use cap_std::fs::MetadataExt as CapMetadataExt;
 use thiserror::Error;
 
 use crate::adls::Document;
 use crate::fragment::{
     BaselineHash, CanonicalSource, CanonicalSourceError, FragmentPath, ParseError, ParsedSource,
 };
+use crate::source_root::{SourceRoot, relative_path};
 
 /// A path-sorted, owned view of every fragment and filesystem input.
 #[derive(Debug)]
 pub struct Inventory {
+    source_root: SourceRoot,
     document_bytes: Vec<u8>,
     entries: Vec<InventoryEntry>,
 }
@@ -27,13 +30,15 @@ impl Inventory {
         document_bytes: Vec<u8>,
         source_root: impl AsRef<Path>,
     ) -> Result<Self, InventoryError> {
-        Self::discover_inner(document_bytes, source_root.as_ref(), None)
+        let source_root = open_source_root(source_root.as_ref())?;
+        Self::discover_inner(document_bytes, source_root, None)
     }
 
     pub(crate) fn discover_for_document(
         source_root: &Path,
         document_path: &Path,
     ) -> Result<Self, InventoryError> {
+        let source_root = open_source_root(source_root)?;
         let document = read_document(document_path)?;
         let origin = DocumentOrigin {
             path: document_path,
@@ -44,14 +49,9 @@ impl Inventory {
 
     fn discover_inner(
         document_bytes: Vec<u8>,
-        source_root: &Path,
+        source_root: SourceRoot,
         document_origin: Option<DocumentOrigin<'_>>,
     ) -> Result<Self, InventoryError> {
-        let source_root = source_root.to_path_buf();
-        validate_source_root(&source_root).map_err(|source| InventoryError::SourceRoot {
-            path: source_root.clone(),
-            source,
-        })?;
         let document = Document::parse(&document_bytes)
             .map_err(|source| InventoryError::InvalidDocument { source })?;
 
@@ -88,14 +88,14 @@ impl Inventory {
         let mut target_identities = BTreeMap::<FileIdentity, FragmentPath>::new();
         for fragment in discovered {
             validate_parents(&source_root, &fragment.path)?;
-            let target = target_path(&source_root, &fragment.path);
+            let target = source_root.named_path(relative_path(&fragment.path));
             if document_origin.is_some_and(|document| document.path == target) {
                 return Err(InventoryError::DocumentTarget {
                     path: fragment.path,
                     target,
                 });
             }
-            let target_input = read_optional_target(&fragment.path, &target)?;
+            let target_input = read_optional_target(&source_root, &fragment.path, &target)?;
             let filesystem = match target_input {
                 None => None,
                 Some(input) => {
@@ -140,6 +140,7 @@ impl Inventory {
         }
 
         Ok(Self {
+            source_root,
             document_bytes,
             entries,
         })
@@ -147,6 +148,10 @@ impl Inventory {
 
     pub fn document_bytes(&self) -> &[u8] {
         &self.document_bytes
+    }
+
+    pub(crate) fn source_root(&self) -> &SourceRoot {
+        &self.source_root
     }
 
     pub fn entries(&self) -> &[InventoryEntry] {
@@ -210,17 +215,21 @@ struct FileIdentity {
 }
 
 impl FileIdentity {
-    fn from_metadata(metadata: &fs::Metadata) -> Self {
-        Self {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-        }
+    fn new(device: u64, inode: u64) -> Self {
+        Self { device, inode }
     }
 }
 
 struct ExistingInput {
     bytes: Vec<u8>,
     identity: FileIdentity,
+}
+
+fn open_source_root(path: &Path) -> Result<SourceRoot, InventoryError> {
+    SourceRoot::open(path).map_err(|source| InventoryError::SourceRoot {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 fn validate_uniqueness(discovered: &[DiscoveredFragment]) -> Result<(), InventoryError> {
@@ -236,44 +245,25 @@ fn validate_uniqueness(discovered: &[DiscoveredFragment]) -> Result<(), Inventor
     Ok(())
 }
 
-fn target_path(source_root: &Path, path: &FragmentPath) -> PathBuf {
-    let mut target = source_root.to_path_buf();
-    for segment in path.as_str().split('/') {
-        target.push(segment);
-    }
-    target
-}
-
-fn validate_parents(source_root: &Path, path: &FragmentPath) -> Result<(), InventoryError> {
-    let mut parent = source_root.to_path_buf();
-    let mut segments = path.as_str().split('/').peekable();
-    while let Some(segment) = segments.next() {
-        if segments.peek().is_none() {
-            break;
+fn validate_parents(source_root: &SourceRoot, path: &FragmentPath) -> Result<(), InventoryError> {
+    let mut parent = PathBuf::new();
+    if let Some(segments) = relative_path(path).parent() {
+        for segment in segments {
+            parent.push(segment);
+            validate_optional_directory(source_root, &parent).map_err(|source| {
+                InventoryError::FragmentParent {
+                    path: path.clone(),
+                    parent: source_root.named_path(&parent),
+                    source,
+                }
+            })?;
         }
-        parent.push(segment);
-        validate_optional_directory(&parent).map_err(|source| InventoryError::FragmentParent {
-            path: path.clone(),
-            parent: parent.clone(),
-            source,
-        })?;
     }
     Ok(())
 }
 
-fn validate_source_root(path: &Path) -> Result<(), io::Error> {
-    let metadata = fs::metadata(path)?;
-    if !metadata.is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotADirectory,
-            "path is not a directory",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_optional_directory(path: &Path) -> Result<(), io::Error> {
-    match fs::metadata(path) {
+fn validate_optional_directory(source_root: &SourceRoot, path: &Path) -> Result<(), io::Error> {
+    match source_root.metadata(path) {
         Ok(metadata) if metadata.is_dir() => Ok(()),
         Ok(_) => Err(io::Error::new(
             io::ErrorKind::NotADirectory,
@@ -285,10 +275,11 @@ fn validate_optional_directory(path: &Path) -> Result<(), io::Error> {
 }
 
 fn read_optional_target(
+    source_root: &SourceRoot,
     path: &FragmentPath,
     target: &Path,
 ) -> Result<Option<ExistingInput>, InventoryError> {
-    let mut file = match File::open(target) {
+    let mut file = match source_root.open_target(path) {
         Ok(file) => file,
         Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(source) => {
@@ -312,7 +303,7 @@ fn read_optional_target(
             target: target.to_path_buf(),
         });
     }
-    let identity = FileIdentity::from_metadata(&metadata);
+    let identity = FileIdentity::new(metadata.dev(), metadata.ino());
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
         .map_err(|source| InventoryError::TargetRead {
@@ -334,7 +325,7 @@ fn read_document(path: &Path) -> Result<ExistingInput, InventoryError> {
             path: path.to_path_buf(),
             source,
         })?;
-    let identity = FileIdentity::from_metadata(&metadata);
+    let identity = FileIdentity::new(metadata.dev(), metadata.ino());
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
         .map_err(|source| InventoryError::DocumentInput {

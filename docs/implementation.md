@@ -10,11 +10,15 @@ This document records implementation decisions as Zwirn develops. `docs/design.m
 
 `thiserror` derives typed validation and operational errors. Unresolved synchronization states are ordinary results.
 
+`cap-std` anchors fragment filesystem operations to one opened source-root directory and confines path resolution beneath it.
+
 `tempfile` provides isolated workspaces for filesystem tests.
 
 ## Filesystem I/O
 
 Zwirn uses whole-file reads and prepares outputs in memory.
+
+Zwirn opens the source root once and retains its directory capability in the inventory through commit. Inventory reads and commit writes use canonical fragment paths relative to that same capability. The source-root spelling itself may contain symbolic links; opening it establishes the anchor. Containment does not exclude mounted subtrees or hard links to otherwise unmanaged files.
 
 Fragment uniqueness is exact canonical marker-path equality. During discovery, Zwirn compares the device and inode of the opened document and existing fragment targets to reject aliases among managed inputs. These identities are discarded after discovery and are not revalidated before writing. Directory identities and absent fragment targets are not compared.
 

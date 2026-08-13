@@ -14,6 +14,8 @@ The source root defaults to the parent of the document path as named. An explici
 
 The source root must exist and be a directory.
 
+Opening the source root establishes the directory that anchors fragment access for the command. Fragment path resolution, parent-directory creation, and external writes remain beneath that directory. Relative symbolic links may be followed when their resolution remains beneath the opened root; absolute or escaping symbolic links are invalid.
+
 The document and source root form a trusted local workspace. The contents read during discovery define the command's inputs.
 
 ## Fragments

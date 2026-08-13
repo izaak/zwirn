@@ -264,6 +264,63 @@ fn rejects_a_fragment_target_identifying_the_document_file() {
     assert_eq!(fs::read(document_path).unwrap(), document_bytes);
 }
 
+#[cfg(unix)]
+#[test]
+fn an_escaping_source_root_symlink_aborts_before_any_write() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = tempdir().unwrap();
+    let source_root = workspace.path().join("sources");
+    let outside = workspace.path().join("outside");
+    fs::create_dir(&source_root).unwrap();
+    fs::create_dir(&outside).unwrap();
+    symlink("../outside", source_root.join("z-escape")).unwrap();
+
+    let baseline = source("baseline");
+    let baseline_hash = BaselineHash::from_source(&baseline);
+    let document_bytes = document_with_sources([
+        &format!(
+            concat!(
+                "-- @{{ a-safe.lua\nchanged safe\n-- @}} a-safe.lua {baseline_hash}\n",
+                "-- @{{ z-escape/target.lua\nchanged outside\n",
+                "-- @}} z-escape/target.lua {baseline_hash}\n",
+            ),
+            baseline_hash = baseline_hash,
+        ),
+        "",
+        "",
+        "",
+    ]);
+    let document_path = workspace.path().join("patch.audulus4");
+    fs::write(&document_path, &document_bytes).unwrap();
+    fs::write(source_root.join("a-safe.lua"), baseline.as_str()).unwrap();
+    fs::write(outside.join("target.lua"), baseline.as_str()).unwrap();
+
+    let error = execute(Request {
+        cwd: workspace.path(),
+        document: Path::new("patch.audulus4"),
+        source_root: Some(Path::new("sources")),
+        selectors: &[],
+        mode: Mode::Mutate(Operation::Sync),
+    })
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        Error::Inventory(InventoryError::FragmentParent { path, .. })
+            if path.as_str() == "z-escape/target.lua"
+    ));
+    assert_eq!(
+        fs::read(source_root.join("a-safe.lua")).unwrap(),
+        baseline.as_str().as_bytes()
+    );
+    assert_eq!(
+        fs::read(outside.join("target.lua")).unwrap(),
+        baseline.as_str().as_bytes()
+    );
+    assert_eq!(fs::read(document_path).unwrap(), document_bytes);
+}
+
 fn source(value: &str) -> CanonicalSource {
     CanonicalSource::try_from(value).unwrap()
 }

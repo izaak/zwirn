@@ -124,20 +124,48 @@ fn source_root_must_exist_and_be_a_directory() {
 
 #[cfg(unix)]
 #[test]
-fn regular_file_symlink_targets_follow_trusted_workspace_paths() {
+fn in_root_relative_directory_symlinks_are_followed() {
     use std::os::unix::fs::symlink;
 
     let workspace = tempdir().unwrap();
-    fs::write(workspace.path().join("real.lua"), b"source\n").unwrap();
-    symlink("real.lua", workspace.path().join("linked.lua")).unwrap();
-    let document =
-        document_with_sources(["-- @{ linked.lua\nsource\n-- @} linked.lua\n", "", "", ""]);
+    fs::create_dir_all(workspace.path().join("aliases")).unwrap();
+    fs::create_dir_all(workspace.path().join("real")).unwrap();
+    fs::write(workspace.path().join("real/source.lua"), b"source\n").unwrap();
+    symlink("../real", workspace.path().join("aliases/linked")).unwrap();
+    let document = document_with_sources([
+        "-- @{ aliases/linked/source.lua\nsource\n-- @} aliases/linked/source.lua\n",
+        "",
+        "",
+        "",
+    ]);
 
     let inventory = Inventory::discover(document, workspace.path()).unwrap();
     assert_eq!(
         inventory.entries()[0].filesystem.as_ref().unwrap(),
         &CanonicalSource::try_from("source").unwrap()
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn absolute_symlinks_are_rejected_even_when_they_point_into_the_source_root() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = tempdir().unwrap();
+    let real = workspace.path().join("real.lua");
+    fs::write(&real, b"source\n").unwrap();
+    symlink(&real, workspace.path().join("absolute.lua")).unwrap();
+    let document = document_with_sources([
+        "-- @{ absolute.lua\nsource\n-- @} absolute.lua\n",
+        "",
+        "",
+        "",
+    ]);
+
+    assert!(matches!(
+        Inventory::discover(document, workspace.path()),
+        Err(InventoryError::TargetAccess { path, .. }) if path.as_str() == "absolute.lua"
+    ));
 }
 
 #[cfg(unix)]

@@ -2,23 +2,23 @@
 
 use std::error::Error;
 use std::fmt;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
 use crate::fragment::FragmentPath;
+use crate::source_root::{SourceRoot, relative_path};
 
-/// How a prepared external output opens its destination.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ExternalWrite {
+pub(crate) enum ExternalWrite {
     CreateNew,
     CreateOrTruncate,
 }
 
 /// A fully prepared external fragment output.
-pub struct ExternalOutput<'a> {
+pub(crate) struct ExternalOutput<'a> {
     pub path: &'a FragmentPath,
     pub destination: &'a Path,
     pub bytes: &'a [u8],
@@ -26,18 +26,19 @@ pub struct ExternalOutput<'a> {
 }
 
 /// A fully prepared document output.
-pub struct DocumentOutput<'a> {
+pub(crate) struct DocumentOutput<'a> {
     pub destination: &'a Path,
     pub bytes: &'a [u8],
 }
 
 /// `external` must be strictly ordered by canonical fragment path. External
 /// files are written in that order, followed by the document.
-pub fn commit(
+pub(crate) fn commit(
+    source_root: &SourceRoot,
     external: &[ExternalOutput<'_>],
     document: Option<DocumentOutput<'_>>,
 ) -> Result<(), CommitError> {
-    commit_with(&mut RealFilesystem, external, document)
+    commit_with(&mut RealFilesystem { source_root }, external, document)
 }
 
 fn commit_with<F: CommitFilesystem>(
@@ -52,7 +53,7 @@ fn commit_with<F: CommitFilesystem>(
         .try_reserve_exact(external.len())
         .map_err(|_| CommitFailure::AllocationFailed.before_writes())?;
     for output in external {
-        if let Some(parent) = nonempty_parent(output.destination)
+        if let Some(parent) = nonempty_parent(relative_path(output.path))
             && let Err(source) = filesystem.create_dir_all(parent)
         {
             return Err(CommitFailure::CreateExternalParent {
@@ -62,7 +63,7 @@ fn commit_with<F: CommitFilesystem>(
             }
             .after(completed));
         }
-        if let Err(source) = filesystem.write(output.destination, output.bytes, output.write) {
+        if let Err(source) = filesystem.write_external(output.path, output.bytes, output.write) {
             return Err(CommitFailure::WriteExternal {
                 path: output.path.clone(),
                 destination: output.destination.to_owned(),
@@ -74,11 +75,7 @@ fn commit_with<F: CommitFilesystem>(
     }
 
     if let Some(document) = document
-        && let Err(source) = filesystem.write(
-            document.destination,
-            document.bytes,
-            ExternalWrite::CreateOrTruncate,
-        )
+        && let Err(source) = filesystem.write_document(document.destination, document.bytes)
     {
         return Err(CommitFailure::WriteDocument {
             destination: document.destination.to_owned(),
@@ -109,25 +106,38 @@ fn nonempty_parent(path: &Path) -> Option<&Path> {
 
 trait CommitFilesystem {
     fn create_dir_all(&mut self, path: &Path) -> io::Result<()>;
-    fn write(&mut self, path: &Path, bytes: &[u8], write: ExternalWrite) -> io::Result<()>;
+    fn write_external(
+        &mut self,
+        path: &FragmentPath,
+        bytes: &[u8],
+        write: ExternalWrite,
+    ) -> io::Result<()>;
+    fn write_document(&mut self, path: &Path, bytes: &[u8]) -> io::Result<()>;
 }
 
-struct RealFilesystem;
+struct RealFilesystem<'a> {
+    source_root: &'a SourceRoot,
+}
 
-impl CommitFilesystem for RealFilesystem {
+impl CommitFilesystem for RealFilesystem<'_> {
     fn create_dir_all(&mut self, path: &Path) -> io::Result<()> {
-        fs::create_dir_all(path)
+        self.source_root.create_dir_all(path)
     }
 
-    fn write(&mut self, path: &Path, bytes: &[u8], write: ExternalWrite) -> io::Result<()> {
+    fn write_external(
+        &mut self,
+        path: &FragmentPath,
+        bytes: &[u8],
+        write: ExternalWrite,
+    ) -> io::Result<()> {
         match write {
-            ExternalWrite::CreateNew => OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path)?
-                .write_all(bytes),
-            ExternalWrite::CreateOrTruncate => fs::write(path, bytes),
+            ExternalWrite::CreateNew => self.source_root.create_target(path, bytes),
+            ExternalWrite::CreateOrTruncate => self.source_root.replace_target(path, bytes),
         }
+    }
+
+    fn write_document(&mut self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        fs::write(path, bytes)
     }
 }
 
@@ -240,6 +250,7 @@ mod tests {
         let document = workspace.path().join("patch.audulus4");
         fs::write(&existing, b"old external content").unwrap();
         fs::write(&document, b"old document").unwrap();
+        let source_root = SourceRoot::open(workspace.path()).unwrap();
 
         let a = FragmentPath::try_from("a.lua").unwrap();
         let b = FragmentPath::try_from("nested/b.lua").unwrap();
@@ -259,6 +270,7 @@ mod tests {
         ];
 
         commit(
+            &source_root,
             &external,
             Some(DocumentOutput {
                 destination: &document,
@@ -279,6 +291,7 @@ mod tests {
         let document = workspace.path().join("patch.audulus4");
         fs::write(&occupied, b"appeared after discovery").unwrap();
         fs::write(&document, b"old document").unwrap();
+        let source_root = SourceRoot::open(workspace.path()).unwrap();
 
         let path = FragmentPath::try_from("fragment.lua").unwrap();
         let external = [ExternalOutput {
@@ -289,6 +302,7 @@ mod tests {
         }];
 
         let error = commit(
+            &source_root,
             &external,
             Some(DocumentOutput {
                 destination: &document,
@@ -306,14 +320,72 @@ mod tests {
         assert_eq!(fs::read(document).unwrap(), b"old document");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn an_escaping_parent_at_commit_cannot_reach_an_outside_file_or_the_document() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let root_path = workspace.path().join("sources");
+        let outside = workspace.path().join("outside");
+        fs::create_dir(&root_path).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("target.lua"), b"outside").unwrap();
+        let document = workspace.path().join("patch.audulus4");
+        fs::write(&document, b"old document").unwrap();
+
+        let source_root = SourceRoot::open(&root_path).unwrap();
+        symlink("../outside", root_path.join("z-escape")).unwrap();
+
+        let safe = FragmentPath::try_from("a-safe.lua").unwrap();
+        let escape = FragmentPath::try_from("z-escape/target.lua").unwrap();
+        let safe_destination = root_path.join(safe.as_str());
+        let escape_destination = root_path.join(escape.as_str());
+        let external = [
+            ExternalOutput {
+                path: &safe,
+                destination: &safe_destination,
+                bytes: b"safe\n",
+                write: ExternalWrite::CreateNew,
+            },
+            ExternalOutput {
+                path: &escape,
+                destination: &escape_destination,
+                bytes: b"escaped\n",
+                write: ExternalWrite::CreateOrTruncate,
+            },
+        ];
+
+        let error = commit(
+            &source_root,
+            &external,
+            Some(DocumentOutput {
+                destination: &document,
+                bytes: b"new document",
+            }),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.completed(), std::slice::from_ref(&safe));
+        assert!(matches!(
+            error.failure(),
+            CommitFailure::CreateExternalParent { path, .. }
+                | CommitFailure::WriteExternal { path, .. }
+                if path == &escape
+        ));
+        assert_eq!(fs::read(safe_destination).unwrap(), b"safe\n");
+        assert_eq!(fs::read(outside.join("target.lua")).unwrap(), b"outside");
+        assert_eq!(fs::read(document).unwrap(), b"old document");
+    }
+
     #[test]
     fn stops_in_canonical_order_and_reports_only_completed_external_writes() {
         let a_destination = Path::new("out/a");
         let b_destination = Path::new("out/b");
         let c_destination = Path::new("out/c");
-        let a = FragmentPath::try_from("a").unwrap();
-        let b = FragmentPath::try_from("b").unwrap();
-        let c = FragmentPath::try_from("c").unwrap();
+        let a = FragmentPath::try_from("out/a").unwrap();
+        let b = FragmentPath::try_from("out/b").unwrap();
+        let c = FragmentPath::try_from("out/c").unwrap();
         let external = [
             ExternalOutput {
                 path: &a,
@@ -353,7 +425,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("after writing external fragment `a`")
+                .contains("after writing external fragment `out/a`")
         );
     }
 
@@ -452,7 +524,21 @@ mod tests {
             Ok(())
         }
 
-        fn write(&mut self, path: &Path, _bytes: &[u8], _write: ExternalWrite) -> io::Result<()> {
+        fn write_external(
+            &mut self,
+            path: &FragmentPath,
+            _bytes: &[u8],
+            _write: ExternalWrite,
+        ) -> io::Result<()> {
+            let path = relative_path(path);
+            self.record("write", path);
+            if self.fail_write.as_deref() == Some(path) {
+                return Err(io::Error::other("injected failure"));
+            }
+            Ok(())
+        }
+
+        fn write_document(&mut self, path: &Path, _bytes: &[u8]) -> io::Result<()> {
             self.record("write", path);
             if self.fail_write.as_deref() == Some(path) {
                 return Err(io::Error::other("injected failure"));
