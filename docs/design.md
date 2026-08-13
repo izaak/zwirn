@@ -16,7 +16,7 @@ The source root must exist and be a directory.
 
 Opening the source root establishes the directory that anchors fragment access for the command. Fragment path resolution, parent-directory creation, and external writes remain beneath that directory. Relative symbolic links may be followed when their resolution remains beneath the opened root; absolute or escaping symbolic links are invalid.
 
-The document and source root form a trusted local workspace. The contents read during discovery define the command's inputs.
+Filesystem behavior is defined for a trusted local workspace that remains stable during an invocation. The contents read during discovery define the command's inputs.
 
 ## Fragments
 
@@ -78,7 +78,7 @@ Fragment source is the complete sequence of lines strictly between its marker li
 
 Marker paths are nonempty, use `/` separators, and have canonical relative form. A canonical path has no leading slash, backslash, empty segment, `.` or `..` segment, or trailing slash.
 
-A canonical fragment path is resolved relative to the source root. A fragment target lexically equal to the resolved document path is invalid. The document and existing fragment targets identify distinct filesystem files. An existing target is a regular file. File creation may create missing parent directories.
+A canonical fragment path is resolved relative to the source root. A fragment target lexically equal to the resolved document path is invalid. The document and existing fragment targets identify distinct filesystem files. A successful mutating command does not create a fragment target that identifies the same filesystem file as another fragment target. An existing target is a regular file. File creation may create missing parent directories.
 
 ## Discovery
 
@@ -139,7 +139,7 @@ A validation failure aborts the command before writing. Selected fragments with 
 
 ## Writes
 
-All outputs are prepared before writing. External files are written directly in canonical fragment-path order, followed by the document. A fragment target absent during discovery is created exclusively, and its write fails if a filesystem entry occupies that path. Targets present during discovery use ordinary create-or-truncate behavior. Writes stop at the first I/O failure. The current destination may be partially written; completed writes and created directories remain in place.
+All outputs are prepared before writing. External files are written directly in canonical fragment-path order, followed by the document. A fragment target absent during discovery is created exclusively, and its write fails if a filesystem entry occupies that path. After creating it, Zwirn checks whether any other fragment target that was absent during discovery identifies the new file. An alias is an operational failure after the new fragment has been written. Targets present during discovery use ordinary create-or-truncate behavior. Writes stop at the first operational failure. The current destination may be partially written; completed writes and created directories remain in place.
 
 The document mutation set consists of fragment source and closing-marker hashes. Within source strings, all other text is preserved exactly. All other logical document data remains unchanged.
 

@@ -247,7 +247,18 @@ fn mutate(
         destination: document_path,
         bytes,
     });
-    commit::commit(inventory.source_root(), &external, document)?;
+    let absent_targets = inventory
+        .entries()
+        .iter()
+        .filter(|entry| entry.filesystem.is_none())
+        .map(|entry| &entry.path)
+        .collect::<Vec<_>>();
+    commit::commit(
+        inventory.source_root(),
+        &external,
+        &absent_targets,
+        document,
+    )?;
 
     Ok(Report {
         entries: report_entries,

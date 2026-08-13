@@ -36,14 +36,21 @@ pub(crate) struct DocumentOutput<'a> {
 pub(crate) fn commit(
     source_root: &SourceRoot,
     external: &[ExternalOutput<'_>],
+    absent_targets: &[&FragmentPath],
     document: Option<DocumentOutput<'_>>,
 ) -> Result<(), CommitError> {
-    commit_with(&mut RealFilesystem { source_root }, external, document)
+    commit_with(
+        &mut RealFilesystem { source_root },
+        external,
+        absent_targets,
+        document,
+    )
 }
 
 fn commit_with<F: CommitFilesystem>(
     filesystem: &mut F,
     external: &[ExternalOutput<'_>],
+    absent_targets: &[&FragmentPath],
     document: Option<DocumentOutput<'_>>,
 ) -> Result<(), CommitError> {
     validate_order(external)?;
@@ -63,15 +70,31 @@ fn commit_with<F: CommitFilesystem>(
             }
             .after(completed));
         }
-        if let Err(source) = filesystem.write_external(output.path, output.bytes, output.write) {
-            return Err(CommitFailure::WriteExternal {
-                path: output.path.clone(),
-                destination: output.destination.to_owned(),
-                source,
+        let aliased_target = match filesystem.write_external(
+            output.path,
+            output.bytes,
+            output.write,
+            absent_targets,
+        ) {
+            Ok(aliased_target) => aliased_target,
+            Err(source) => {
+                return Err(CommitFailure::WriteExternal {
+                    path: output.path.clone(),
+                    destination: output.destination.to_owned(),
+                    source,
+                }
+                .after(completed));
+            }
+        };
+        completed.push(output.path.clone());
+
+        if let Some(other_path) = aliased_target {
+            return Err(CommitFailure::CreatedTargetAlias {
+                created_path: output.path.clone(),
+                other_path,
             }
             .after(completed));
         }
-        completed.push(output.path.clone());
     }
 
     if let Some(document) = document
@@ -111,7 +134,8 @@ trait CommitFilesystem {
         path: &FragmentPath,
         bytes: &[u8],
         write: ExternalWrite,
-    ) -> io::Result<()>;
+        absent_targets: &[&FragmentPath],
+    ) -> io::Result<Option<FragmentPath>>;
     fn write_document(&mut self, path: &Path, bytes: &[u8]) -> io::Result<()>;
 }
 
@@ -129,10 +153,14 @@ impl CommitFilesystem for RealFilesystem<'_> {
         path: &FragmentPath,
         bytes: &[u8],
         write: ExternalWrite,
-    ) -> io::Result<()> {
+        absent_targets: &[&FragmentPath],
+    ) -> io::Result<Option<FragmentPath>> {
         match write {
-            ExternalWrite::CreateNew => self.source_root.create_target(path, bytes),
-            ExternalWrite::CreateOrTruncate => self.source_root.replace_target(path, bytes),
+            ExternalWrite::CreateNew => self.source_root.create_target(path, bytes, absent_targets),
+            ExternalWrite::CreateOrTruncate => {
+                self.source_root.replace_target(path, bytes)?;
+                Ok(None)
+            }
         }
     }
 
@@ -217,6 +245,14 @@ pub enum CommitFailure {
         source: io::Error,
     },
 
+    #[error(
+        "created external fragment `{created_path}` also identifies fragment target `{other_path}`"
+    )]
+    CreatedTargetAlias {
+        created_path: FragmentPath,
+        other_path: FragmentPath,
+    },
+
     #[error("cannot write document `{}`: {source}", destination.display())]
     WriteDocument {
         destination: PathBuf,
@@ -272,6 +308,7 @@ mod tests {
         commit(
             &source_root,
             &external,
+            &[&b],
             Some(DocumentOutput {
                 destination: &document,
                 bytes: b"new document",
@@ -304,6 +341,7 @@ mod tests {
         let error = commit(
             &source_root,
             &external,
+            &[&path],
             Some(DocumentOutput {
                 destination: &document,
                 bytes: b"new document",
@@ -359,6 +397,7 @@ mod tests {
         let error = commit(
             &source_root,
             &external,
+            &[&safe],
             Some(DocumentOutput {
                 destination: &document,
                 bytes: b"new document",
@@ -411,7 +450,7 @@ mod tests {
             fail_write: Some(b_destination.to_owned()),
         };
 
-        let error = commit_with(&mut filesystem, &external, None).unwrap_err();
+        let error = commit_with(&mut filesystem, &external, &[], None).unwrap_err();
 
         assert_eq!(error.completed(), std::slice::from_ref(&a));
         assert!(matches!(
@@ -452,7 +491,7 @@ mod tests {
             fail_write: None,
         };
 
-        let error = commit_with(&mut filesystem, &external, None).unwrap_err();
+        let error = commit_with(&mut filesystem, &external, &[], None).unwrap_err();
 
         assert!(matches!(
             error.failure(),
@@ -489,6 +528,7 @@ mod tests {
         let error = commit_with(
             &mut filesystem,
             &external,
+            &[],
             Some(DocumentOutput {
                 destination: &document,
                 bytes: b"new document",
@@ -516,6 +556,15 @@ mod tests {
         fn record(&mut self, operation: &str, path: &Path) {
             self.events.push(format!("{operation}:{}", path.display()));
         }
+
+        fn write_external(&mut self, path: &FragmentPath) -> io::Result<()> {
+            let path = relative_path(path);
+            self.record("write", path);
+            if self.fail_write.as_deref() == Some(path) {
+                return Err(io::Error::other("injected failure"));
+            }
+            Ok(())
+        }
     }
 
     impl CommitFilesystem for RecordingFilesystem {
@@ -529,13 +578,10 @@ mod tests {
             path: &FragmentPath,
             _bytes: &[u8],
             _write: ExternalWrite,
-        ) -> io::Result<()> {
-            let path = relative_path(path);
-            self.record("write", path);
-            if self.fail_write.as_deref() == Some(path) {
-                return Err(io::Error::other("injected failure"));
-            }
-            Ok(())
+            _absent_targets: &[&FragmentPath],
+        ) -> io::Result<Option<FragmentPath>> {
+            self.write_external(path)?;
+            Ok(None)
         }
 
         fn write_document(&mut self, path: &Path, _bytes: &[u8]) -> io::Result<()> {

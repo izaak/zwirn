@@ -4,6 +4,7 @@ use std::path::Path;
 use tempfile::tempdir;
 
 use zwirn::adls::Document;
+use zwirn::commit::CommitFailure;
 use zwirn::engine::{Error, ExitState, Mode, Report, ReportEntry, Request, execute};
 use zwirn::fragment::{BaselineHash, CanonicalSource, FragmentPath};
 use zwirn::inventory::{Inventory, InventoryError};
@@ -317,6 +318,58 @@ fn an_escaping_source_root_symlink_aborts_before_any_write() {
     assert_eq!(
         fs::read(outside.join("target.lua")).unwrap(),
         baseline.as_str().as_bytes()
+    );
+    assert_eq!(fs::read(document_path).unwrap(), document_bytes);
+}
+
+#[cfg(unix)]
+#[test]
+fn creation_detects_an_alias_with_an_unselected_absent_target() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = tempdir().unwrap();
+    let source_root = workspace.path().join("sources");
+    fs::create_dir(&source_root).unwrap();
+    fs::create_dir(source_root.join("real")).unwrap();
+    symlink("real", source_root.join("alias")).unwrap();
+
+    let embedded = source("selected contents");
+    let document_bytes = document_with_sources([
+        concat!(
+            "-- @{ alias/created.lua\nselected contents\n-- @} alias/created.lua\n",
+            "-- @{ real/created.lua\nunselected contents\n-- @} real/created.lua\n",
+        ),
+        "",
+        "",
+        "",
+    ]);
+    let document_path = workspace.path().join("patch.audulus4");
+    fs::write(&document_path, &document_bytes).unwrap();
+    let selected = path("alias/created.lua");
+
+    let error = execute(Request {
+        cwd: workspace.path(),
+        document: Path::new("patch.audulus4"),
+        source_root: Some(Path::new("sources")),
+        selectors: std::slice::from_ref(&selected),
+        mode: Mode::Mutate(Operation::Extract { force: false }),
+    })
+    .unwrap_err();
+
+    let Error::Commit(error) = error else {
+        panic!("expected a commit failure");
+    };
+    assert_eq!(error.completed(), std::slice::from_ref(&selected));
+    assert!(matches!(
+        error.failure(),
+        CommitFailure::CreatedTargetAlias {
+            created_path,
+            other_path,
+        } if created_path == &selected && other_path.as_str() == "real/created.lua"
+    ));
+    assert_eq!(
+        fs::read(source_root.join("real/created.lua")).unwrap(),
+        embedded.as_str().as_bytes()
     );
     assert_eq!(fs::read(document_path).unwrap(), document_bytes);
 }

@@ -14,7 +14,7 @@ use crate::adls::Document;
 use crate::fragment::{
     BaselineHash, CanonicalSource, CanonicalSourceError, FragmentPath, ParseError, ParsedSource,
 };
-use crate::source_root::{SourceRoot, relative_path};
+use crate::source_root::{FileIdentity, SourceRoot, relative_path};
 
 /// A path-sorted, owned view of every fragment and filesystem input.
 #[derive(Debug)]
@@ -206,18 +206,6 @@ struct DiscoveredFragment {
 struct DocumentOrigin<'a> {
     path: &'a Path,
     identity: FileIdentity,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct FileIdentity {
-    device: u64,
-    inode: u64,
-}
-
-impl FileIdentity {
-    fn new(device: u64, inode: u64) -> Self {
-        Self { device, inode }
-    }
 }
 
 struct ExistingInput {
