@@ -16,7 +16,7 @@ This document records implementation decisions as Zwirn develops. `docs/design.m
 
 Zwirn uses whole-file reads and prepares outputs in memory.
 
-Fragment uniqueness is exact canonical marker-path equality. Distinct marker paths are otherwise independent. Zwirn does not compare resolved destinations or filesystem identities.
+Fragment uniqueness is exact canonical marker-path equality. Distinct marker paths are otherwise independent. Zwirn does not compare fragment destinations with one another or compare filesystem identities.
 
 Direct writes use ordinary platform file creation, truncation, and write semantics, including their effects on destination metadata.
 

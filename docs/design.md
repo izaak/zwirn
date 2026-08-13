@@ -76,7 +76,7 @@ Fragment source is the complete sequence of lines strictly between its marker li
 
 Marker paths are nonempty, use `/` separators, and have canonical relative form. A canonical path has no leading slash, backslash, empty segment, `.` or `..` segment, or trailing slash.
 
-A canonical fragment path is resolved relative to the source root. An existing target is a regular file. File creation may create missing parent directories.
+A canonical fragment path is resolved relative to the source root. A fragment target lexically equal to the resolved document path is invalid. An existing target is a regular file. File creation may create missing parent directories.
 
 ## Discovery
 

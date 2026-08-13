@@ -26,7 +26,23 @@ impl Inventory {
         document_bytes: Vec<u8>,
         source_root: impl AsRef<Path>,
     ) -> Result<Self, InventoryError> {
-        let source_root = source_root.as_ref().to_path_buf();
+        Self::discover_inner(document_bytes, source_root.as_ref(), None)
+    }
+
+    pub(crate) fn discover_for_document(
+        document_bytes: Vec<u8>,
+        source_root: &Path,
+        document_path: &Path,
+    ) -> Result<Self, InventoryError> {
+        Self::discover_inner(document_bytes, source_root, Some(document_path))
+    }
+
+    fn discover_inner(
+        document_bytes: Vec<u8>,
+        source_root: &Path,
+        document_path: Option<&Path>,
+    ) -> Result<Self, InventoryError> {
+        let source_root = source_root.to_path_buf();
         validate_source_root(&source_root).map_err(|source| InventoryError::SourceRoot {
             path: source_root.clone(),
             source,
@@ -67,6 +83,12 @@ impl Inventory {
         for fragment in discovered {
             validate_parents(&source_root, &fragment.path)?;
             let target = target_path(&source_root, &fragment.path);
+            if document_path == Some(target.as_path()) {
+                return Err(InventoryError::DocumentTarget {
+                    path: fragment.path,
+                    target,
+                });
+            }
             let target_bytes = read_optional_target(&fragment.path, &target)?;
             let filesystem = match target_bytes.as_deref() {
                 None => None,
@@ -283,6 +305,9 @@ pub enum InventoryError {
         first_node: u32,
         second_node: u32,
     },
+
+    #[error("fragment `{path}` targets the Audulus document `{}`", target.display())]
+    DocumentTarget { path: FragmentPath, target: PathBuf },
 
     #[error("cannot validate parent `{}` for fragment `{path}`: {source}", parent.display())]
     FragmentParent {
