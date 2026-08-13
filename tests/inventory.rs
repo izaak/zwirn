@@ -73,6 +73,29 @@ fn rejects_global_duplicates() {
 }
 
 #[test]
+fn rejects_strict_component_ancestry_across_interposed_paths() {
+    let workspace = tempdir().unwrap();
+    let document = document_with_sources([
+        concat!(
+            "-- @{ a\nparent\n-- @} a\n",
+            "-- @{ a-elsewhere\nother\n-- @} a-elsewhere\n",
+            "-- @{ a/child.lua\nchild\n-- @} a/child.lua\n",
+        ),
+        "",
+        "",
+        "",
+    ]);
+
+    assert!(matches!(
+        Inventory::discover(document, workspace.path()),
+        Err(InventoryError::PathPrefixConflict {
+            ancestor,
+            descendant,
+        }) if ancestor.as_str() == "a" && descendant.as_str() == "a/child.lua"
+    ));
+}
+
+#[test]
 fn validates_every_existing_target_before_selection() {
     let workspace = tempdir().unwrap();
     fs::write(workspace.path().join("selected.lua"), b"selected\n").unwrap();

@@ -20,7 +20,7 @@ Zwirn uses whole-file reads and prepares outputs in memory.
 
 Zwirn opens the source root once and retains its directory capability in the inventory through commit. Inventory reads and commit writes use canonical fragment paths relative to that same capability. The source-root spelling itself may contain symbolic links; opening it establishes the anchor. Containment does not exclude mounted subtrees or hard links to otherwise unmanaged files.
 
-Fragment uniqueness is exact canonical marker-path equality. During discovery, Zwirn compares the device and inode of the opened document and existing fragment targets to reject aliases among managed inputs. These identities are discarded after discovery and are not revalidated before writing. Directory identities are not compared.
+Fragment uniqueness is exact canonical marker-path equality. Separately, discovery rejects a canonical marker path that is a strict component ancestor of another because both cannot be regular-file targets. It does not infer ancestry through case folding, Unicode normalization, or other filesystem-specific name equivalence. During discovery, Zwirn compares the device and inode of the opened document and existing fragment targets to reject aliases among managed inputs. These identities are discarded after discovery and are not revalidated before writing. Directory identities are not compared.
 
 After exclusively creating an absent fragment, Zwirn derives its identity from the creation handle and probes the other targets that were absent during discovery through the source-root capability. Only a successful identity match is a collision; probe errors are ignored. A collision fails the commit after counting the new fragment as written, without rollback.
 

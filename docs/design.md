@@ -78,7 +78,7 @@ Fragment source is the complete sequence of lines strictly between its marker li
 
 Marker paths are nonempty, use `/` separators, and have canonical relative form. A canonical path has no leading slash, backslash, empty segment, `.` or `..` segment, or trailing slash.
 
-A canonical fragment path is resolved relative to the source root. A fragment target lexically equal to the resolved document path is invalid. The document and existing fragment targets identify distinct filesystem files. A successful mutating command does not create a fragment target that identifies the same filesystem file as another fragment target. An existing target is a regular file. File creation may create missing parent directories.
+A canonical fragment path is resolved relative to the source root. No canonical fragment path is a strict component ancestor of another. Apart from strict ancestry and shared filesystem-file identity, distinct canonical fragment paths are independent. A fragment target lexically equal to the resolved document path is invalid. The document and existing fragment targets identify distinct filesystem files. A successful mutating command does not create a fragment target that identifies the same filesystem file as another fragment target. An existing target is a regular file. File creation may create missing parent directories.
 
 ## Discovery
 
@@ -133,7 +133,7 @@ Synchronization commands create and replace source content. Deletion is outside 
 
 ## Validation
 
-Discovery and validation complete before writes begin. Validation covers document structure, marker structure, hashes, source encoding, source-root validity, canonical fragment paths, existing fragment-target types, managed-input identity, fragment uniqueness, and command selectors.
+Discovery and validation complete before writes begin. Validation covers document structure, marker structure, hashes, source encoding, source-root validity, canonical fragment paths, existing fragment-target types, managed-input identity, fragment uniqueness and component ancestry, and command selectors.
 
 A validation failure aborts the command before writing. Selected fragments with ordinary unresolved states are processed independently, allowing safe actions to proceed alongside conflicts, missing files, and states belonging to the opposite direction.
 

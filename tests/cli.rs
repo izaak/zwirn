@@ -5,11 +5,8 @@ use std::process::{Command, Output, Stdio};
 
 use tempfile::TempDir;
 
-use zwirn::adls::Document;
-
 const REPRESENTATIVE: &[u8] = include_bytes!("fixtures/representative.audulus4");
 const EMPTY: &[u8] = include_bytes!("fixtures/empty.audulus4");
-const SOURCE_TYPES: &[u8] = include_bytes!("fixtures/source-types.audulus4");
 const LUA: &[u8] = include_bytes!("fixtures/angular_smoother.lua");
 const LYTE: &[u8] = include_bytes!("fixtures/angular_smoother.lyte");
 
@@ -136,35 +133,6 @@ fn an_empty_inventory_is_already_synchronized() {
     let sync = run(&workspace, ["sync", "empty.audulus4"]);
     assert_result(&sync, 0, "", "");
     assert_eq!(fs::read(document).unwrap(), EMPTY);
-}
-
-#[test]
-fn prefix_related_outputs_reach_ordered_writes_and_report_partial_failure() {
-    let workspace = tempfile::tempdir().unwrap();
-    let parsed = Document::parse(SOURCE_TYPES).unwrap();
-    let node = parsed.sources()[0];
-    let document_bytes = parsed
-        .rewrite(&[(
-            node.handle,
-            concat!(
-                "-- @{ a\nparent\n-- @} a\n",
-                "-- @{ a/child.lua\nchild\n-- @} a/child.lua\n",
-            ),
-        )])
-        .unwrap()
-        .into_owned();
-    let document = workspace.path().join("patch.audulus4");
-    fs::write(&document, &document_bytes).unwrap();
-
-    let sync = run(&workspace, ["sync", "patch.audulus4"]);
-
-    assert_eq!(sync.status.code(), Some(2));
-    assert!(sync.stdout.is_empty());
-    let diagnostic = stderr(&sync);
-    assert!(diagnostic.contains("external file already written for `a`"));
-    assert!(diagnostic.contains("cannot create the parent of external fragment `a/child.lua`"));
-    assert_eq!(fs::read(workspace.path().join("a")).unwrap(), b"parent\n");
-    assert_eq!(fs::read(document).unwrap(), document_bytes);
 }
 
 #[cfg(unix)]

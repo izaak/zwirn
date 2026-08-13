@@ -83,6 +83,7 @@ impl Inventory {
 
         discovered.sort_by(|left, right| left.path.cmp(&right.path));
         validate_uniqueness(&discovered)?;
+        validate_path_prefixes(&discovered)?;
 
         let mut entries = Vec::with_capacity(discovered.len());
         let mut target_identities = BTreeMap::<FileIdentity, FragmentPath>::new();
@@ -228,6 +229,23 @@ fn validate_uniqueness(discovered: &[DiscoveredFragment]) -> Result<(), Inventor
                 first_node: pair[0].node_index,
                 second_node: pair[1].node_index,
             });
+        }
+    }
+    Ok(())
+}
+
+fn validate_path_prefixes(discovered: &[DiscoveredFragment]) -> Result<(), InventoryError> {
+    for fragment in discovered {
+        for (separator, _) in fragment.path.as_str().match_indices('/') {
+            let ancestor = &fragment.path.as_str()[..separator];
+            if let Ok(index) =
+                discovered.binary_search_by(|candidate| candidate.path.as_str().cmp(ancestor))
+            {
+                return Err(InventoryError::PathPrefixConflict {
+                    ancestor: discovered[index].path.clone(),
+                    descendant: fragment.path.clone(),
+                });
+            }
         }
     }
     Ok(())
@@ -384,6 +402,12 @@ pub enum InventoryError {
         path: FragmentPath,
         first_node: u32,
         second_node: u32,
+    },
+
+    #[error("fragment path `{ancestor}` is a strict component ancestor of `{descendant}`")]
+    PathPrefixConflict {
+        ancestor: FragmentPath,
+        descendant: FragmentPath,
     },
 
     #[error("fragment `{path}` targets the Audulus document `{}`", target.display())]
