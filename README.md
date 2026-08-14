@@ -1,18 +1,16 @@
 # Zwirn
 
-Zwirn synchronizes source fragments between ordinary files and the Lua, Lyte,
-and GLSL embedded in Audulus 4 documents.
-
-Marked source remains editable inside Audulus while also living in files that
-are convenient to organize, edit, and version. Zwirn detects which side changed
-and transfers source when the direction is unambiguous.
+Zwirn synchronizes Lua, Lyte, and GLSL fragments between Audulus 4 documents and
+ordinary source files. Embedded source remains editable in Audulus while also
+available to other editors and version control. Zwirn transfers unambiguous
+changes in either direction.
 
 Zwirn supports macOS and Linux. It is pre-release software intended for stable,
 trusted, version-controlled workspaces.
 
 ## Install from source
 
-A recent stable Rust toolchain is required. From a source checkout:
+With a recent stable Rust toolchain:
 
 ```console
 cargo install --locked --path .
@@ -28,54 +26,22 @@ local gain = 0.5
 -- @} src/filter.lua
 ```
 
-Zwirn synchronizes files on disk. Save open source files and close Audulus before
-running `embed`, `extract`, or `sync`:
+Zwirn synchronizes files on disk. Save open source files and close the Audulus
+document before running `embed`, `extract`, or `sync`:
 
 ```console
 zwirn sync patch.audulus4
 ```
 
-Reopen Audulus and reload any source files changed by Zwirn before continuing to
-edit.
-
-With the default source root and no existing target, Zwirn creates
-`src/filter.lua` beneath the document's directory and records a synchronization
-hash on the closing marker:
+If `src/filter.lua` does not exist, `sync` creates it beneath the document's
+directory and adds a synchronization hash to the closing marker:
 
 ```lua
 -- @} src/filter.lua 9238d3dc5eb11d81
 ```
 
-The external file contains only the source between the markers. Zwirn maintains
-the hash as the shared baseline, so subsequent changes can flow from the file
-into Audulus or from a saved Audulus document back into the file:
-
-```console
-zwirn status patch.audulus4
-zwirn sync patch.audulus4
-```
-
-## Markers
-
-Zwirn scans source-bearing Canvas, DSP, Shader, and Lyte DSP nodes.
-
-| Node type   | Language | Marker comment |
-|-------------|----------|----------------|
-| Canvas, DSP | Lua      | `--`           |
-| Shader      | GLSL     | `//`           |
-| Lyte DSP    | Lyte     | `//`           |
-
-For example, a GLSL fragment uses `//` markers:
-
-```glsl
-// @{ shaders/color.glsl
-vec3 color = vec3(1.0);
-// @} shaders/color.glsl
-```
-
-A source node may contain multiple sequential fragments. Each marker path
-identifies one fragment relative to the source root, which defaults to the
-document's parent directory.
+The external file contains only the source between the markers. Edit either
+copy, then run `sync` again.
 
 ## Commands
 
@@ -88,25 +54,37 @@ extract  source files ← .audulus4
 sync     source files ↔ .audulus4
 ```
 
-Omitting fragment arguments selects every fragment. Passing paths selects an
-exact subset:
+Each `FRAGMENT` argument is an exact marker path relative to the source root.
+Pass one or more to select an exact subset; omit them to select every fragment.
 
 ```console
 zwirn embed patch.audulus4 src/filter.lua
 ```
 
-Set an explicit source root with `--source-root`:
+The source root defaults to the document's parent directory. Set an explicit
+root with `--source-root`:
 
 ```console
 zwirn sync --source-root sources patch.audulus4
 ```
 
+## Markers
+
+Marker syntax follows the source-bearing node type:
+
+| Node type   | Language | Marker comment |
+|-------------|----------|----------------|
+| Canvas, DSP | Lua      | `--`           |
+| Shader      | GLSL     | `//`           |
+| Lyte DSP    | Lyte     | `//`           |
+
+A source node may contain multiple sequential fragments.
+
 ## Conflicts
 
-Each adopted closing marker stores a 16-character prefix of the SHA-256 hash
-from the last synchronized source. Zwirn compares that baseline with the
-embedded and filesystem copies. A one-sided change has a safe direction;
-divergent changes on both sides remain unresolved.
+Once synchronized, a closing marker's 16-character SHA-256 prefix records the
+last synchronized source. Zwirn transfers one-sided changes; divergent changes
+remain unresolved.
 
 Resolve a conflict manually, or explicitly select which side wins:
 
@@ -115,30 +93,30 @@ zwirn embed --force patch.audulus4 src/filter.lua
 zwirn extract --force patch.audulus4 src/filter.lua
 ```
 
-Forced `embed` selects the filesystem copy. Forced `extract` selects the
-embedded copy. Force applies only to explicitly selected conflicting fragments.
+With explicitly selected conflicts, forced `embed` selects the filesystem copy;
+forced `extract` selects the embedded copy.
 
 ## Output and exit status
 
 Results are ordered by fragment path and written one per line as
 `PATH<TAB>RESULT`.
 
-- Exit status `0` means every selected fragment is synchronized.
-- Exit status `1` means the command completed with one or more fragments still
-  requiring attention.
-- Exit status `2` means a validation or operational failure prevented normal
-  completion.
+```text
+0   every selected fragment is synchronized
+1   one or more fragments require attention
+2   validation or operational failure
+```
 
-Zwirn validates and prepares all outputs before writing. It writes fragment
-files directly in path order, followed by the document. An operational failure
-can leave completed writes in place.
+After validating and preparing all outputs, Zwirn writes fragment files in path
+order and the document last. An operational failure can leave earlier writes in
+place.
 
 ## Reference
 
-[Design](docs/design.md) defines observable behavior. [Implementation
-notes](docs/implementation.md) record internal decisions, and [ADLS source
-fields](reference/adls-code.md) describes the relevant part of the `.audulus4`
-representation.
+- [Design](docs/design.md) defines observable behavior.
+- [Implementation notes](docs/implementation.md) record internal decisions.
+- The [ADLS source-field reference](reference/adls-code.md) describes the
+  relevant part of the `.audulus4` representation.
 
 ## License
 
