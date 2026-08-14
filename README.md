@@ -28,11 +28,15 @@ local gain = 0.5
 -- @} src/filter.lua
 ```
 
-Save the document, then synchronize it:
+Zwirn synchronizes files on disk. Save open source files and close Audulus before
+running `embed`, `extract`, or `sync`:
 
 ```console
 zwirn sync patch.audulus4
 ```
+
+Reopen Audulus and reload any source files changed by Zwirn before continuing to
+edit.
 
 With the default source root and no existing target, Zwirn creates
 `src/filter.lua` beneath the document's directory and records a synchronization
