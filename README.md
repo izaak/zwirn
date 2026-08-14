@@ -121,3 +121,6 @@ place.
 ## License
 
 Zwirn is available under the [MIT License](LICENSE).
+
+Zwirn is an independent project and is not affiliated with or endorsed by
+Audulus LLC.
