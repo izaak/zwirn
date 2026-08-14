@@ -118,6 +118,12 @@ place.
 - The [ADLS source-field reference](reference/adls-code.md) describes the
   relevant part of the `.audulus4` representation.
 
+## AI assistance
+
+Portions of Zwirn were developed with assistance from AI coding tools,
+including OpenAI Codex. Their output was reviewed, tested, and adapted by the
+maintainers, who remain responsible for the final implementation.
+
 ## License
 
 Zwirn is available under the [MIT License](LICENSE).
