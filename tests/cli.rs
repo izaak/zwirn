@@ -11,6 +11,21 @@ const LUA: &[u8] = include_bytes!("fixtures/angular_smoother.lua");
 const LYTE: &[u8] = include_bytes!("fixtures/angular_smoother.lyte");
 
 #[test]
+fn root_help_explains_shared_operands() {
+    let workspace = tempfile::tempdir().unwrap();
+    let help = run(&workspace, ["--help"]);
+
+    assert_eq!(help.status.code(), Some(0));
+    assert!(help.stderr.is_empty());
+
+    let stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(stdout.contains("Usage: zwirn <COMMAND> [OPTIONS] <DOCUMENT> [FRAGMENT]..."));
+    assert!(stdout.contains("DOCUMENT is an .audulus4 file."));
+    assert!(stdout.contains("FRAGMENT is an exact marker path relative to the source root."));
+    assert!(stdout.contains("zwirn status patch.audulus4"));
+}
+
+#[test]
 fn status_and_sync_form_a_sorted_idempotent_workflow() {
     let workspace = representative_workspace();
     let source_root = workspace.path().join("source");

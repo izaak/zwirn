@@ -10,7 +10,12 @@ use zwirn::reconcile::Operation;
 
 /// Synchronize external source fragments with Audulus documents.
 #[derive(Debug, Parser)]
-#[command(version, about)]
+#[command(
+    version,
+    about,
+    override_usage = "zwirn <COMMAND> [OPTIONS] <DOCUMENT> [FRAGMENT]...",
+    after_help = "DOCUMENT is an .audulus4 file.\nFRAGMENT is an exact marker path relative to the source root.\nOmitting fragments selects every fragment.\n\nExamples:\n  zwirn status patch.audulus4\n  zwirn sync patch.audulus4\n  zwirn embed patch.audulus4 src/filter.lua"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
