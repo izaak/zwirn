@@ -2,7 +2,7 @@
 name = "zwirn"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.87"
 description = "Synchronize Lua, Lyte, and GLSL fragments between Audulus 4 documents and source files"
 repository = "https://github.com/izaak/zwirn"
 readme = "README.md"
