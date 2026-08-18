@@ -5,5 +5,6 @@ For Apple SDK/API discovery, use `bin/xcsdk` first. Results are bounded; absence
 # Repository map
 
 - `docs/design.md` is normative for observable Zwirn behavior.
+- `docs/target-design.md` defines target behavior for `zwirn live`; when implemented and accepted, its language moves into `docs/design.md`.
 - `docs/implementation.md` records evolving implementation decisions.
 - `reference/adls-code.md` is the focused ADLS implementation reference.
