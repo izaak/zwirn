@@ -29,19 +29,10 @@ On Linux, `live` remains visible in the command-line interface but reports that
 it is unsupported and exits with status 2. Existing one-shot behavior remains
 supported.
 
-## Saved state and coordinated access
+## Coordinated access
 
-On macOS, live mode and the existing one-shot commands coordinate their actual
-document and fragment reads and writes with other filesystem presenters. Linux
-continues to use direct filesystem access.
-
-Coordination does not change Zwirn's synchronization states, validation before
-writes, source-root containment, exclusive creation, write ordering, partial
-commit behavior, or reporting. It governs access to saved filesystem contents;
-Zwirn does not inspect or promise to protect unsaved state held inside Audulus
-or a source editor. Applications may remain open, but users should normally
-edit one representation at a time and save changes for them to participate in
-synchronization.
+On macOS, live mode uses the coordinated document and fragment access defined
+for the one-shot commands in `docs/design.md`.
 
 ## Monitoring and reconciliation
 

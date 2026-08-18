@@ -1,7 +1,96 @@
 //! Internal policy boundary around complete named filesystem accesses.
 
 use std::convert::Infallible;
-use std::path::Path;
+use std::error::Error;
+use std::fmt;
+use std::path::{Path, PathBuf};
+
+use thiserror::Error;
+
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub(crate) use macos::CoordinatedAccess;
+
+/// The kind of complete filesystem access being coordinated.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccessKind {
+    Read,
+    Write,
+}
+
+impl fmt::Display for AccessKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Read => formatter.write_str("read"),
+            Self::Write => formatter.write_str("write"),
+        }
+    }
+}
+
+/// Why a macOS coordinated access failed before its filesystem body ran.
+#[derive(Debug, Eq, Error, PartialEq)]
+pub enum CoordinationFailure {
+    #[error("Foundation cannot represent the named filesystem path exactly")]
+    PathNotRepresentable,
+
+    #[error("cannot resolve the named path from the current directory: {message}")]
+    PathResolution { message: String },
+
+    #[error("coordination failed ({domain} {code}): {message}")]
+    Refused {
+        domain: String,
+        code: i64,
+        message: String,
+    },
+
+    #[error("Foundation supplied a changed accessor path")]
+    AccessorPathChanged,
+}
+
+/// One coordinated access that failed before its filesystem body ran.
+#[derive(Debug, Eq, PartialEq)]
+pub struct CoordinatedAccessFailure {
+    kind: AccessKind,
+    path: PathBuf,
+    reason: CoordinationFailure,
+}
+
+impl CoordinatedAccessFailure {
+    pub(crate) fn new(kind: AccessKind, path: PathBuf, reason: CoordinationFailure) -> Self {
+        Self { kind, path, reason }
+    }
+
+    pub fn kind(&self) -> AccessKind {
+        self.kind
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn reason(&self) -> &CoordinationFailure {
+        &self.reason
+    }
+}
+
+impl fmt::Display for CoordinatedAccessFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "cannot coordinate {} access to `{}`: {}",
+            self.kind,
+            self.path.display(),
+            self.reason
+        )
+    }
+}
+
+impl Error for CoordinatedAccessFailure {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.reason)
+    }
+}
 
 /// Statically dispatched access policy for one complete named read or write.
 ///
@@ -23,7 +112,7 @@ pub(crate) trait AccessPolicy {
     ) -> Result<Result<T, E>, Self::Error>;
 }
 
-/// Direct, synchronous access selected by all current entry points.
+/// Direct, synchronous access selected on non-macOS platforms.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct DirectAccess;
 

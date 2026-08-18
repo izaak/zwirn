@@ -26,8 +26,9 @@ local gain = 0.5
 -- @} src/filter.lua
 ```
 
-Zwirn synchronizes files on disk. Save open source files and close the Audulus
-document before running `embed`, `extract`, or `sync`:
+Zwirn synchronizes saved files on disk. Save changes in Audulus and in open
+source files before running `status`, `embed`, `extract`, or `sync`; Audulus and
+source editors may remain open:
 
 ```console
 zwirn sync patch.audulus4

@@ -7,7 +7,12 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-use crate::access::{AccessPolicy, DirectAccess, PolicyFailure};
+#[cfg(target_os = "macos")]
+use crate::access::CoordinatedAccess;
+#[cfg(not(target_os = "macos"))]
+use crate::access::DirectAccess;
+pub use crate::access::{AccessKind, CoordinatedAccessFailure, CoordinationFailure};
+use crate::access::{AccessPolicy, PolicyFailure};
 use crate::adls::{Document, NodeHandle};
 use crate::commit::{self, CommitAccessFailure, DocumentOutput, ExternalOutput, ExternalWrite};
 use crate::fragment::{
@@ -82,15 +87,40 @@ impl ExitState {
 
 /// Executes one complete Zwirn request.
 pub fn execute(request: Request<'_>) -> Result<Report, Error> {
-    let mut access = DirectAccess;
-    match execute_with_access(request, &mut access) {
+    #[cfg(target_os = "macos")]
+    {
+        let mut access = CoordinatedAccess;
+        coordinated_result(execute_with_access(request, &mut access))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let mut access = DirectAccess;
+        match execute_with_access(request, &mut access) {
+            Ok(report) => Ok(report),
+            Err(PolicyFailure::Operation(error)) => Err(error),
+            Err(PolicyFailure::Access(EngineAccessFailure::Discovery(error))) => match error {},
+            Err(PolicyFailure::Access(EngineAccessFailure::Commit(CommitAccessFailure {
+                source,
+                completed: _completed,
+            }))) => match source {},
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn coordinated_result(
+    result: Result<Report, PolicyFailure<EngineAccessFailure<CoordinatedAccessFailure>, Error>>,
+) -> Result<Report, Error> {
+    match result {
         Ok(report) => Ok(report),
         Err(PolicyFailure::Operation(error)) => Err(error),
-        Err(PolicyFailure::Access(EngineAccessFailure::Discovery(error))) => match error {},
+        Err(PolicyFailure::Access(EngineAccessFailure::Discovery(failure))) => {
+            Err(CoordinationError::new(failure, Vec::new()).into())
+        }
         Err(PolicyFailure::Access(EngineAccessFailure::Commit(CommitAccessFailure {
             source,
-            completed: _completed,
-        }))) => match source {},
+            completed,
+        }))) => Err(CoordinationError::new(source, completed).into()),
     }
 }
 
@@ -386,6 +416,55 @@ fn map_plan_error(error: PlanError, classified: &[(&InventoryEntry, Classificati
     }
 }
 
+/// A coordinated-access failure together with external writes already completed.
+#[derive(Debug)]
+pub struct CoordinationError {
+    completed: Vec<FragmentPath>,
+    failure: CoordinatedAccessFailure,
+}
+
+impl CoordinationError {
+    fn new(failure: CoordinatedAccessFailure, completed: Vec<FragmentPath>) -> Self {
+        Self { completed, failure }
+    }
+
+    /// External fragments whose complete prepared bytes were written first.
+    pub fn completed(&self) -> &[FragmentPath] {
+        &self.completed
+    }
+
+    /// The coordinated access that failed before its body ran.
+    pub fn failure(&self) -> &CoordinatedAccessFailure {
+        &self.failure
+    }
+}
+
+impl std::fmt::Display for CoordinationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.failure.fmt(formatter)?;
+        if !self.completed.is_empty() {
+            formatter.write_str(" after writing external fragment")?;
+            if self.completed.len() != 1 {
+                formatter.write_str("s")?;
+            }
+            formatter.write_str(" ")?;
+            for (index, path) in self.completed.iter().enumerate() {
+                if index != 0 {
+                    formatter.write_str(", ")?;
+                }
+                write!(formatter, "`{path}`")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for CoordinationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.failure)
+    }
+}
+
 /// A validation, materialization, or operational failure.
 #[derive(Debug, Error)]
 pub enum Error {
@@ -437,6 +516,9 @@ pub enum Error {
     #[error(transparent)]
     Commit(#[from] crate::commit::CommitError),
 
+    #[error(transparent)]
+    Coordination(#[from] CoordinationError),
+
     #[error("memory could not be allocated while attempting to {operation}")]
     Allocation { operation: &'static str },
 }
@@ -446,6 +528,7 @@ impl Error {
     pub fn committed_external(&self) -> &[FragmentPath] {
         match self {
             Self::Commit(error) => error.completed(),
+            Self::Coordination(error) => error.completed(),
             _ => &[],
         }
     }
@@ -537,6 +620,43 @@ mod tests {
                 AccessEvent::Write(document_path),
             ]
         );
+    }
+
+    #[test]
+    fn coordinated_commit_failure_keeps_completed_fragments_in_the_public_error() {
+        let completed = FragmentPath::try_from("already-written.lua").unwrap();
+        let failure = CoordinatedAccessFailure::new(
+            AccessKind::Write,
+            PathBuf::from("blocked.audulus4"),
+            CoordinationFailure::Refused {
+                domain: "NSCocoaErrorDomain".into(),
+                code: 256,
+                message: "access refused".into(),
+            },
+        );
+        let result: Result<
+            Report,
+            PolicyFailure<EngineAccessFailure<CoordinatedAccessFailure>, Error>,
+        > = Err(PolicyFailure::Access(EngineAccessFailure::Commit(
+            CommitAccessFailure {
+                source: failure,
+                completed: vec![completed.clone()],
+            },
+        )));
+
+        let error = coordinated_result(result).unwrap_err();
+
+        let Error::Coordination(error) = error else {
+            panic!("expected a coordination error");
+        };
+        assert_eq!(error.completed(), std::slice::from_ref(&completed));
+        assert_eq!(error.failure().kind(), AccessKind::Write);
+        assert_eq!(error.failure().path(), Path::new("blocked.audulus4"));
+        assert!(matches!(
+            error.failure().reason(),
+            CoordinationFailure::Refused { domain, code: 256, message }
+                if domain == "NSCocoaErrorDomain" && message == "access refused"
+        ));
     }
 
     fn document_with_sources(sources: [&str; 4]) -> Vec<u8> {

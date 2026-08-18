@@ -30,7 +30,17 @@ Existing fragment targets and the document use ordinary platform create-or-trunc
 
 Complete document reads, fragment reads, fragment target writes, and document writes pass through a crate-private, statically dispatched access policy. The policy receives the lexical document path or the named fragment path derived from the retained source-root capability; those paths identify the access but do not replace capability-relative fragment mechanics. Parent validation and creation remain outside this boundary. Policy-access failure is represented separately from the unchanged result of an access body.
 
-All current entry points select direct access. It invokes each body once, synchronously, and cannot fail before the body runs, so the policy boundary does not add observable errors or change existing error chains.
+One-shot command execution selects the platform policy at compile time. macOS uses coordinated access; other targets use direct access. Direct access invokes each body once, synchronously, and cannot fail before the body runs, so it preserves the existing error chain.
+
+On macOS, every policy access constructs a short-lived `NSFileCoordinator` with no Zwirn-owned file presenter and uses the default read or write options. The named fragment path is claimed even when its target does not exist. A failure to establish coordinated access is returned without retrying the operation through direct access.
+
+The macOS policy accepts an accessor only when its filesystem representation matches the configured named path. It rejects a changed accessor path before invoking the filesystem body and never substitutes that path for the retained capability-relative fragment operation. Ordinary absence, exclusive creation, and alias detection therefore remain properties of the existing body.
+
+A coordinated body runs synchronously and exactly once. Once invoked, its result is authoritative, so Rust selects its callback result before interpreting the native outcome. Coordination failures that occur before invocation are typed separately from body failures and retain the native error domain, code, and description when Foundation supplies them. A commit-side access failure also retains the fragment paths whose writes completed earlier in the ordered commit.
+
+The Objective-C bridge owns the Foundation block and autorelease pool and catches Objective-C exceptions before returning through its C boundary. Rust catches callback panics before they can cross that boundary and retains callback state until the synchronous native call returns. Paths cross the bridge as filesystem-representation bytes rather than UTF-8 text, preserving non-UTF-8 paths.
+
+The Objective-C source is compiled and the Foundation and Core Foundation frameworks are linked only for macOS targets. Its deployment target follows Rust's target rather than the host SDK. Non-macOS builds do not require Apple frameworks or an Objective-C toolchain.
 
 ## ADLS source fields
 

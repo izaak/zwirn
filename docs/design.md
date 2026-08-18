@@ -18,6 +18,14 @@ Opening the source root establishes the directory that anchors fragment access f
 
 Filesystem behavior is defined for a trusted local workspace that remains stable during an invocation. The contents read during discovery define the command's inputs.
 
+## Saved state and coordinated access
+
+On macOS, `status`, `embed`, `extract`, and `sync` coordinate their actual document and fragment reads and writes with filesystem presenters. Linux continues to use direct filesystem access.
+
+The configured named paths remain fixed during a command. If coordination supplies an accessor path different from the named path, the access fails before its filesystem operation runs. Zwirn does not follow the changed path or retry the operation with direct access.
+
+Coordination does not change Zwirn's synchronization states, validation before writes, source-root containment, exclusive creation, write ordering, partial-commit behavior, or reporting. It governs access to saved filesystem contents; Zwirn does not inspect or promise to protect unsaved state held inside Audulus or a source editor. Applications may remain open, but users should normally edit one representation at a time and save changes for them to participate in synchronization.
+
 ## Fragments
 
 Fragments are regions of embedded source identified by Zwirn markers. Each fragment corresponds to one source file. Its marker path is its identity.

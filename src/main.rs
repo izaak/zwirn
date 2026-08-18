@@ -129,6 +129,9 @@ fn fail_engine(error: Error) -> ExitCode {
         Error::Commit(error) => {
             let _ = writeln!(stderr, "zwirn: {}", error.failure());
         }
+        Error::Coordination(error) => {
+            let _ = writeln!(stderr, "zwirn: {}", error.failure());
+        }
         _ => {
             let _ = writeln!(stderr, "zwirn: {error}");
         }
