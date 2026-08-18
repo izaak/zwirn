@@ -28,6 +28,10 @@ The lexical document-target check overlaps with identity comparison when a targe
 
 Existing fragment targets and the document use ordinary platform create-or-truncate writes. Fragment targets absent during discovery use exclusive creation. Both use ordinary platform write behavior, including its effects on destination metadata.
 
+Complete document reads, fragment reads, fragment target writes, and document writes pass through a crate-private, statically dispatched access policy. The policy receives the lexical document path or the named fragment path derived from the retained source-root capability; those paths identify the access but do not replace capability-relative fragment mechanics. Parent validation and creation remain outside this boundary. Policy-access failure is represented separately from the unchanged result of an access body.
+
+All current entry points select direct access. It invokes each body once, synchronously, and cannot fail before the body runs, so the policy boundary does not add observable errors or change existing error chains.
+
 ## ADLS source fields
 
 PatchObject pool indexes identify distinct tables. This gives each node handle an independently rewritable object.

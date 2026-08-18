@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use crate::access::{AccessPolicy, DirectAccess, PolicyFailure};
 use crate::adls::{Document, NodeHandle};
-use crate::commit::{self, DocumentOutput, ExternalOutput, ExternalWrite};
+use crate::commit::{self, CommitAccessFailure, DocumentOutput, ExternalOutput, ExternalWrite};
 use crate::fragment::{
     FragmentPath, FragmentUpdate, ParsedSource, RewriteError as FragmentRewriteError,
 };
@@ -81,15 +82,47 @@ impl ExitState {
 
 /// Executes one complete Zwirn request.
 pub fn execute(request: Request<'_>) -> Result<Report, Error> {
-    let paths = resolve_paths(request.cwd, request.document, request.source_root)?;
-    let inventory = Inventory::discover_for_document(&paths.source_root, &paths.document)?;
+    let mut access = DirectAccess;
+    match execute_with_access(request, &mut access) {
+        Ok(report) => Ok(report),
+        Err(PolicyFailure::Operation(error)) => Err(error),
+        Err(PolicyFailure::Access(EngineAccessFailure::Discovery(error))) => match error {},
+        Err(PolicyFailure::Access(EngineAccessFailure::Commit(CommitAccessFailure {
+            source,
+            completed: _completed,
+        }))) => match source {},
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum EngineAccessFailure<A> {
+    Discovery(A),
+    Commit(CommitAccessFailure<A>),
+}
+
+pub(crate) fn execute_with_access<P: AccessPolicy>(
+    request: Request<'_>,
+    access: &mut P,
+) -> Result<Report, PolicyFailure<EngineAccessFailure<P::Error>, Error>> {
+    let paths = resolve_paths(request.cwd, request.document, request.source_root)
+        .map_err(PolicyFailure::Operation)?;
+    let inventory =
+        Inventory::discover_for_document_with_access(&paths.source_root, &paths.document, access)
+            .map_err(|failure| {
+            failure
+                .map_access(EngineAccessFailure::Discovery)
+                .map_operation(Error::from)
+        })?;
 
     let selection = if request.selectors.is_empty() {
         SelectionKind::All
     } else {
         SelectionKind::Explicit
     };
-    let selected = inventory.select(request.selectors)?;
+    let selected = inventory
+        .select(request.selectors)
+        .map_err(Error::from)
+        .map_err(PolicyFailure::Operation)?;
     let classified = selected
         .into_iter()
         .map(|entry| {
@@ -101,12 +134,13 @@ pub fn execute(request: Request<'_>) -> Result<Report, Error> {
 
     match request.mode {
         Mode::Status => Ok(status_report(&classified)),
-        Mode::Mutate(operation) => mutate(
+        Mode::Mutate(operation) => mutate_with_access(
             &paths.document,
             &inventory,
             &classified,
             selection,
             operation,
+            access,
         ),
     }
 }
@@ -165,19 +199,21 @@ fn status_report(classified: &[(&InventoryEntry, Classification)]) -> Report {
     }
 }
 
-fn mutate(
+fn mutate_with_access<P: AccessPolicy>(
     document_path: &Path,
     inventory: &Inventory,
     classified: &[(&InventoryEntry, Classification)],
     selection: SelectionKind,
     operation: Operation,
-) -> Result<Report, Error> {
+    access: &mut P,
+) -> Result<Report, PolicyFailure<EngineAccessFailure<P::Error>, Error>> {
     let classifications = classified
         .iter()
         .map(|(_, classification)| *classification)
         .collect::<Vec<_>>();
     let decisions = plan(operation, selection, &classifications)
-        .map_err(|source| map_plan_error(source, classified))?;
+        .map_err(|source| map_plan_error(source, classified))
+        .map_err(PolicyFailure::Operation)?;
 
     let mut node_updates = BTreeMap::<u32, Vec<FragmentUpdate<'_>>>::new();
     let mut extracted = Vec::<&InventoryEntry>::new();
@@ -222,7 +258,8 @@ fn mutate(
         }
     }
 
-    let document_output = materialize_document(inventory.document_bytes(), node_updates)?;
+    let document_output = materialize_document(inventory.document_bytes(), node_updates)
+        .map_err(PolicyFailure::Operation)?;
     if extracted.is_empty() && document_output.is_none() {
         return Ok(Report {
             entries: report_entries,
@@ -252,12 +289,18 @@ fn mutate(
         .filter(|entry| entry.filesystem.is_none())
         .map(|entry| &entry.path)
         .collect::<Vec<_>>();
-    commit::commit(
+    commit::commit_with_access(
+        access,
         inventory.source_root(),
         &external,
         &absent_targets,
         document,
-    )?;
+    )
+    .map_err(|failure| {
+        failure
+            .map_access(EngineAccessFailure::Commit)
+            .map_operation(Error::from)
+    })?;
 
     Ok(Report {
         entries: report_entries,
@@ -405,5 +448,105 @@ impl Error {
             Self::Commit(error) => error.completed(),
             _ => &[],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::convert::Infallible;
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::access::AccessPolicy;
+    use crate::fragment::{BaselineHash, CanonicalSource};
+
+    const SOURCE_TYPES: &[u8] = include_bytes!("../tests/fixtures/source-types.audulus4");
+
+    #[derive(Debug, Eq, PartialEq)]
+    enum AccessEvent {
+        Read(PathBuf),
+        Write(PathBuf),
+    }
+
+    struct RecordingAccess {
+        events: Vec<AccessEvent>,
+    }
+
+    impl AccessPolicy for RecordingAccess {
+        type Error = Infallible;
+
+        fn read<T, E>(
+            &mut self,
+            named_path: &Path,
+            body: impl FnOnce() -> Result<T, E>,
+        ) -> Result<Result<T, E>, Self::Error> {
+            self.events
+                .push(AccessEvent::Read(named_path.to_path_buf()));
+            Ok(body())
+        }
+
+        fn write<T, E>(
+            &mut self,
+            named_path: &Path,
+            body: impl FnOnce() -> Result<T, E>,
+        ) -> Result<Result<T, E>, Self::Error> {
+            self.events
+                .push(AccessEvent::Write(named_path.to_path_buf()));
+            Ok(body())
+        }
+    }
+
+    #[test]
+    fn reconciliation_routes_complete_file_accesses_through_the_policy() {
+        let workspace = tempdir().unwrap();
+        let source_root = workspace.path().join("sources");
+        let fragment_target = source_root.join("nested/fragment.lua");
+        fs::create_dir_all(fragment_target.parent().unwrap()).unwrap();
+
+        let baseline = CanonicalSource::try_from("baseline").unwrap();
+        let baseline_hash = BaselineHash::from_source(&baseline);
+        let source = format!(
+            "-- @{{ nested/fragment.lua\nembedded change\n-- @}} nested/fragment.lua {baseline_hash}\n"
+        );
+        let document_bytes = document_with_sources([&source, "", "", ""]);
+        let document_path = workspace.path().join("patch.audulus4");
+        fs::write(&document_path, document_bytes).unwrap();
+        fs::write(&fragment_target, baseline.as_str()).unwrap();
+
+        let mut access = RecordingAccess { events: Vec::new() };
+        execute_with_access(
+            Request {
+                cwd: workspace.path(),
+                document: Path::new("patch.audulus4"),
+                source_root: Some(Path::new("sources")),
+                selectors: &[],
+                mode: Mode::Mutate(Operation::Sync),
+            },
+            &mut access,
+        )
+        .unwrap();
+
+        assert_eq!(
+            access.events,
+            [
+                AccessEvent::Read(document_path.clone()),
+                AccessEvent::Read(fragment_target.clone()),
+                AccessEvent::Write(fragment_target),
+                AccessEvent::Write(document_path),
+            ]
+        );
+    }
+
+    fn document_with_sources(sources: [&str; 4]) -> Vec<u8> {
+        let document = Document::parse(SOURCE_TYPES).unwrap();
+        let replacements = document
+            .sources()
+            .iter()
+            .zip(sources)
+            .map(|(node, source)| (node.handle, source))
+            .collect::<Vec<_>>();
+        document.rewrite(&replacements).unwrap().into_owned()
     }
 }

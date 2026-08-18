@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+#[cfg(test)]
+use crate::access::DirectAccess;
+use crate::access::{AccessPolicy, PolicyFailure, flatten};
 use crate::fragment::FragmentPath;
 use crate::source_root::{SourceRoot, relative_path};
 
@@ -30,15 +33,40 @@ pub(crate) struct DocumentOutput<'a> {
     pub bytes: &'a [u8],
 }
 
+#[derive(Debug)]
+pub(crate) struct CommitAccessFailure<A> {
+    pub(crate) source: A,
+    pub(crate) completed: Vec<FragmentPath>,
+}
+
 /// `external` must be strictly ordered by canonical fragment path. External
 /// files are written in that order, followed by the document.
+#[cfg(test)]
 pub(crate) fn commit(
     source_root: &SourceRoot,
     external: &[ExternalOutput<'_>],
     absent_targets: &[&FragmentPath],
     document: Option<DocumentOutput<'_>>,
 ) -> Result<(), CommitError> {
-    commit_with(
+    let mut access = DirectAccess;
+    direct_commit_result(commit_with_access(
+        &mut access,
+        source_root,
+        external,
+        absent_targets,
+        document,
+    ))
+}
+
+pub(crate) fn commit_with_access<P: AccessPolicy>(
+    access: &mut P,
+    source_root: &SourceRoot,
+    external: &[ExternalOutput<'_>],
+    absent_targets: &[&FragmentPath],
+    document: Option<DocumentOutput<'_>>,
+) -> Result<(), PolicyFailure<CommitAccessFailure<P::Error>, CommitError>> {
+    commit_using(
+        access,
         &mut RealFilesystem { source_root },
         external,
         absent_targets,
@@ -46,64 +74,116 @@ pub(crate) fn commit(
     )
 }
 
+#[cfg(test)]
 fn commit_with<F: CommitFilesystem>(
     filesystem: &mut F,
     external: &[ExternalOutput<'_>],
     absent_targets: &[&FragmentPath],
     document: Option<DocumentOutput<'_>>,
 ) -> Result<(), CommitError> {
-    validate_order(external)?;
+    let mut access = DirectAccess;
+    direct_commit_result(commit_using(
+        &mut access,
+        filesystem,
+        external,
+        absent_targets,
+        document,
+    ))
+}
+
+#[cfg(test)]
+fn direct_commit_result(
+    result: Result<(), PolicyFailure<CommitAccessFailure<std::convert::Infallible>, CommitError>>,
+) -> Result<(), CommitError> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(PolicyFailure::Operation(error)) => Err(error),
+        Err(PolicyFailure::Access(CommitAccessFailure { source, .. })) => match source {},
+    }
+}
+
+fn commit_using<P: AccessPolicy, F: CommitFilesystem>(
+    access: &mut P,
+    filesystem: &mut F,
+    external: &[ExternalOutput<'_>],
+    absent_targets: &[&FragmentPath],
+    document: Option<DocumentOutput<'_>>,
+) -> Result<(), PolicyFailure<CommitAccessFailure<P::Error>, CommitError>> {
+    validate_order(external).map_err(PolicyFailure::Operation)?;
 
     let mut completed = Vec::new();
     completed
         .try_reserve_exact(external.len())
-        .map_err(|_| CommitFailure::AllocationFailed.before_writes())?;
+        .map_err(|_| PolicyFailure::Operation(CommitFailure::AllocationFailed.before_writes()))?;
     for output in external {
         if let Some(parent) = nonempty_parent(relative_path(output.path))
             && let Err(source) = filesystem.create_dir_all(parent)
         {
-            return Err(CommitFailure::CreateExternalParent {
-                path: output.path.clone(),
-                destination: filesystem.external_destination(output.path),
-                source,
-            }
-            .after(completed));
-        }
-        let aliased_target = match filesystem.write_external(
-            output.path,
-            output.bytes,
-            output.write,
-            absent_targets,
-        ) {
-            Ok(aliased_target) => aliased_target,
-            Err(source) => {
-                return Err(CommitFailure::WriteExternal {
+            return Err(PolicyFailure::Operation(
+                CommitFailure::CreateExternalParent {
                     path: output.path.clone(),
                     destination: filesystem.external_destination(output.path),
                     source,
                 }
-                .after(completed));
+                .after(completed),
+            ));
+        }
+        let destination = filesystem.external_destination(output.path);
+        let aliased_target = match flatten(access.write(&destination, || {
+            filesystem.write_external(output.path, output.bytes, output.write, absent_targets)
+        })) {
+            Ok(aliased_target) => aliased_target,
+            Err(PolicyFailure::Access(source)) => {
+                return Err(PolicyFailure::Access(CommitAccessFailure {
+                    source,
+                    completed,
+                }));
+            }
+            Err(PolicyFailure::Operation(source)) => {
+                return Err(PolicyFailure::Operation(
+                    CommitFailure::WriteExternal {
+                        path: output.path.clone(),
+                        destination,
+                        source,
+                    }
+                    .after(completed),
+                ));
             }
         };
         completed.push(output.path.clone());
 
         if let Some(other_path) = aliased_target {
-            return Err(CommitFailure::CreatedTargetAlias {
-                created_path: output.path.clone(),
-                other_path,
-            }
-            .after(completed));
+            return Err(PolicyFailure::Operation(
+                CommitFailure::CreatedTargetAlias {
+                    created_path: output.path.clone(),
+                    other_path,
+                }
+                .after(completed),
+            ));
         }
     }
 
-    if let Some(document) = document
-        && let Err(source) = filesystem.write_document(document.destination, document.bytes)
-    {
-        return Err(CommitFailure::WriteDocument {
-            destination: document.destination.to_owned(),
-            source,
+    if let Some(document) = document {
+        match flatten(access.write(document.destination, || {
+            filesystem.write_document(document.destination, document.bytes)
+        })) {
+            Ok(()) => {}
+            Err(PolicyFailure::Access(source)) => {
+                return Err(PolicyFailure::Access(CommitAccessFailure {
+                    source,
+                    completed,
+                }));
+            }
+            Err(PolicyFailure::Operation(source)) => {
+                return Err(PolicyFailure::Operation(
+                    CommitFailure::WriteDocument {
+                        destination: document.destination.to_owned(),
+                        source,
+                    }
+                    .after(completed),
+                ));
+            }
         }
-        .after(completed));
     }
     Ok(())
 }
@@ -538,6 +618,78 @@ mod tests {
             filesystem.events.last(),
             Some(&format!("write:{}", document.display()))
         );
+    }
+
+    #[test]
+    fn document_policy_refusal_retains_completed_external_outputs_without_running_its_body() {
+        let document = PathBuf::from("patch.audulus4");
+        let fragment = FragmentPath::try_from("fragment.lua").unwrap();
+        let external = [ExternalOutput {
+            path: &fragment,
+            bytes: b"fragment",
+            write: ExternalWrite::CreateOrTruncate,
+        }];
+        let mut filesystem = RecordingFilesystem {
+            events: Vec::new(),
+            fail_write: None,
+        };
+        let mut access = RefuseAccessTo {
+            path: document.clone(),
+        };
+
+        let error = commit_using(
+            &mut access,
+            &mut filesystem,
+            &external,
+            &[],
+            Some(DocumentOutput {
+                destination: &document,
+                bytes: b"document",
+            }),
+        )
+        .unwrap_err();
+
+        let PolicyFailure::Access(CommitAccessFailure { source, completed }) = error else {
+            panic!("expected policy-access refusal");
+        };
+        assert_eq!(source, AccessRefused);
+        assert_eq!(completed, vec![fragment]);
+        assert_eq!(
+            filesystem.events,
+            ["write:fragment.lua"],
+            "the refused document-write body must not run"
+        );
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct AccessRefused;
+
+    struct RefuseAccessTo {
+        path: PathBuf,
+    }
+
+    impl AccessPolicy for RefuseAccessTo {
+        type Error = AccessRefused;
+
+        fn read<T, E>(
+            &mut self,
+            _named_path: &Path,
+            body: impl FnOnce() -> Result<T, E>,
+        ) -> Result<Result<T, E>, Self::Error> {
+            Ok(body())
+        }
+
+        fn write<T, E>(
+            &mut self,
+            named_path: &Path,
+            body: impl FnOnce() -> Result<T, E>,
+        ) -> Result<Result<T, E>, Self::Error> {
+            if named_path == self.path {
+                Err(AccessRefused)
+            } else {
+                Ok(body())
+            }
+        }
     }
 
     struct RecordingFilesystem {

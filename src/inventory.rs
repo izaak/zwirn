@@ -10,6 +10,7 @@ use std::str::Utf8Error;
 use cap_std::fs::MetadataExt as CapMetadataExt;
 use thiserror::Error;
 
+use crate::access::{AccessPolicy, DirectAccess, PolicyFailure, direct_result, flatten};
 use crate::adls::Document;
 use crate::fragment::{
     BaselineHash, CanonicalSource, CanonicalSourceError, FragmentPath, ParseError, ParsedSource,
@@ -30,46 +31,62 @@ impl Inventory {
         document_bytes: Vec<u8>,
         source_root: impl AsRef<Path>,
     ) -> Result<Self, InventoryError> {
-        let source_root = open_source_root(source_root.as_ref())?;
-        Self::discover_inner(document_bytes, source_root, None)
+        let mut access = DirectAccess;
+        direct_result(Self::discover_with_access(
+            document_bytes,
+            source_root.as_ref(),
+            &mut access,
+        ))
     }
 
-    pub(crate) fn discover_for_document(
+    pub(crate) fn discover_for_document_with_access<P: AccessPolicy>(
         source_root: &Path,
         document_path: &Path,
-    ) -> Result<Self, InventoryError> {
-        let source_root = open_source_root(source_root)?;
-        let document = read_document(document_path)?;
+        access: &mut P,
+    ) -> Result<Self, PolicyFailure<P::Error, InventoryError>> {
+        let source_root = open_source_root(source_root).map_err(PolicyFailure::Operation)?;
+        let document = flatten(access.read(document_path, || read_document(document_path)))?;
         let origin = DocumentOrigin {
             path: document_path,
             identity: document.identity,
         };
-        Self::discover_inner(document.bytes, source_root, Some(origin))
+        Self::discover_inner(document.bytes, source_root, Some(origin), access)
     }
 
-    fn discover_inner(
+    pub(crate) fn discover_with_access<P: AccessPolicy>(
+        document_bytes: Vec<u8>,
+        source_root: &Path,
+        access: &mut P,
+    ) -> Result<Self, PolicyFailure<P::Error, InventoryError>> {
+        let source_root = open_source_root(source_root).map_err(PolicyFailure::Operation)?;
+        Self::discover_inner(document_bytes, source_root, None, access)
+    }
+
+    fn discover_inner<P: AccessPolicy>(
         document_bytes: Vec<u8>,
         source_root: SourceRoot,
         document_origin: Option<DocumentOrigin<'_>>,
-    ) -> Result<Self, InventoryError> {
-        let document = Document::parse(&document_bytes)
-            .map_err(|source| InventoryError::InvalidDocument { source })?;
+        access: &mut P,
+    ) -> Result<Self, PolicyFailure<P::Error, InventoryError>> {
+        let document = Document::parse(&document_bytes).map_err(|source| {
+            PolicyFailure::Operation(InventoryError::InvalidDocument { source })
+        })?;
 
         let mut discovered = Vec::new();
         for node in document.sources() {
             let parsed = ParsedSource::parse(node.kind, node.source).map_err(|source| {
-                InventoryError::InvalidMarkers {
+                PolicyFailure::Operation(InventoryError::InvalidMarkers {
                     node_index: node.handle.index(),
                     source,
-                }
+                })
             })?;
             for fragment in parsed.fragments() {
                 let embedded = CanonicalSource::try_from(fragment.source).map_err(|source| {
-                    InventoryError::InvalidEmbeddedSource {
+                    PolicyFailure::Operation(InventoryError::InvalidEmbeddedSource {
                         node_index: node.handle.index(),
                         path: fragment.path.clone(),
                         source,
-                    }
+                    })
                 })?;
                 discovered.push(DiscoveredFragment {
                     node_index: node.handle.index(),
@@ -82,51 +99,53 @@ impl Inventory {
         drop(document);
 
         discovered.sort_by(|left, right| left.path.cmp(&right.path));
-        validate_uniqueness(&discovered)?;
-        validate_path_prefixes(&discovered)?;
+        validate_uniqueness(&discovered).map_err(PolicyFailure::Operation)?;
+        validate_path_prefixes(&discovered).map_err(PolicyFailure::Operation)?;
 
         let mut entries = Vec::with_capacity(discovered.len());
         let mut target_identities = BTreeMap::<FileIdentity, FragmentPath>::new();
         for fragment in discovered {
-            validate_parents(&source_root, &fragment.path)?;
+            validate_parents(&source_root, &fragment.path).map_err(PolicyFailure::Operation)?;
             let target = source_root.named_path(relative_path(&fragment.path));
             if document_origin.is_some_and(|document| document.path == target) {
-                return Err(InventoryError::DocumentTarget {
+                return Err(PolicyFailure::Operation(InventoryError::DocumentTarget {
                     path: fragment.path,
                     target,
-                });
+                }));
             }
-            let target_input = read_optional_target(&source_root, &fragment.path, &target)?;
+            let target_input = flatten(access.read(&target, || {
+                read_optional_target(&source_root, &fragment.path, &target)
+            }))?;
             let filesystem = match target_input {
                 None => None,
                 Some(input) => {
                     if document_origin.is_some_and(|document| document.identity == input.identity) {
-                        return Err(InventoryError::DocumentTarget {
+                        return Err(PolicyFailure::Operation(InventoryError::DocumentTarget {
                             path: fragment.path,
                             target,
-                        });
+                        }));
                     }
                     if let Some(first_path) = target_identities.get(&input.identity) {
-                        return Err(InventoryError::AliasedTargets {
+                        return Err(PolicyFailure::Operation(InventoryError::AliasedTargets {
                             first_path: first_path.clone(),
                             second_path: fragment.path,
-                        });
+                        }));
                     }
                     target_identities.insert(input.identity, fragment.path.clone());
 
                     let text = std::str::from_utf8(&input.bytes).map_err(|source| {
-                        InventoryError::InvalidTargetUtf8 {
+                        PolicyFailure::Operation(InventoryError::InvalidTargetUtf8 {
                             path: fragment.path.clone(),
                             target: target.clone(),
                             source,
-                        }
+                        })
                     })?;
                     Some(CanonicalSource::try_from(text).map_err(|source| {
-                        InventoryError::InvalidTargetSource {
+                        PolicyFailure::Operation(InventoryError::InvalidTargetSource {
                             path: fragment.path.clone(),
                             target: target.clone(),
                             source,
-                        }
+                        })
                     })?)
                 }
             };
