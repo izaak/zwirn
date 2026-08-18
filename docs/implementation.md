@@ -54,6 +54,16 @@ Classification distinguishes absent-file and matching-file forms of observable `
 
 Command planning is pure. A forced selection is validated as a complete batch before actions are materialized.
 
+## Live scheduling
+
+The platform-independent live scheduling core is a crate-private, effect-emitting transition machine. It has no dependency on the command-line layer, filesystem monitoring, or reconciliation implementation. A later foreground driver will translate native hints and shutdown requests into serialized scheduler inputs, execute reconciliation effects synchronously through the existing full-inventory `sync` path, and report completion back to the scheduler. The driver calls the monitoring-ready transition only after startup succeeds, establishes hint delivery at that handoff, and handles returned effects promptly and reliably. The fresh initial reconciliation subsumes changes completed before the handoff.
+
+Monitoring readiness is the only transition that requests the immediate initial reconciliation. The scheduler enters its reconciling state before emitting a reconciliation effect, making that effect the serialized start of one run. Hints delivered from that point onward can only arm a serialized follow-up.
+
+The first pending hint arms one fixed 50 millisecond coalescing timer. Later hints do not replace that timer. Expiry during reconciliation marks one follow-up as due; expiry after the run finishes starts the follow-up. The future driver delivers the single active timer exactly once; duplicate or misrouted callbacks are adapter defects rather than scheduler states.
+
+Reconciliation completion carries no outcome into the scheduler. A successful run, an attention result, and a blocker therefore have identical scheduling consequences: pending hinted work may proceed, but no result requests an unprompted retry. Emitting a reconciliation effect is the run-start linearization point. The driver executes each such effect exactly once and reports exactly one completion even if shutdown arrives after emission. Shutdown clears pending work immediately. An idle scheduler stops at once; a reconciling scheduler stops only when the synchronous run reports completion and cannot emit another reconciliation first.
+
 ## Command reporting
 
 Results are path-first, tab-separated lines. Mutating commands omit already synchronized fragments and use `record`, `embed`, and `extract` for performed actions. Diagnostics use standard error.
