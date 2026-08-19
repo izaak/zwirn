@@ -115,10 +115,12 @@ fallback.
 
 FSEvents roots must be exactly representable as Core Foundation filesystem
 paths. An unrepresentable root fails live-mode startup; one-shot path support
-is unchanged. Native event metadata is discarded, events caused by Zwirn's own
-writes are not suppressed, and every nonempty callback batch becomes the same
-nonblocking invalidation. FSEvents has no general post-start failure callback,
-so Zwirn does not track whether the stream remains healthy after startup.
+is unchanged. The native callback discards event paths, flags, and IDs and does
+not suppress events caused by Zwirn's own writes. Consequently, every nonempty
+callback batch—including activity unrelated to the configured document or
+discovered fragment targets—becomes the same nonblocking invalidation. FSEvents
+has no general post-start failure callback, so Zwirn does not track whether the
+stream remains healthy after startup.
 
 The monitoring bridge keeps the callback's Rust state alive for the stream
 lifetime. During teardown, it stops and drains event delivery before releasing

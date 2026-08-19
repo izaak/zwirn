@@ -238,9 +238,12 @@ initial reconciliation discovers the state already present at startup. A later
 change is either included in that discovery or requests another reconciliation,
 leaving no gap between monitoring and the initial run.
 
-Filesystem events are invalidation hints, not an ordered history of changes. A
-relevant hint requests a fresh reconciliation of the document and its full
-fragment inventory. Hints and reconciliations do not correspond one-to-one.
+Filesystem events are invalidation hints, not an ordered history of changes.
+Every hint delivered from either watched scope is relevant, including activity
+at paths unrelated to the configured document or discovered fragment targets
+and activity caused by Zwirn's own writes. A hint requests a fresh
+reconciliation of the document and its full fragment inventory. Hints and
+reconciliations do not correspond one-to-one.
 
 Reconciliations are serialized, and multiple hints may be coalesced. A hint
 that arrives during a reconciliation guarantees at least one subsequent
@@ -251,10 +254,10 @@ reconciliation. If filesystem monitoring cannot be established, live mode
 reports the failure and exits with status 2.
 
 Once monitoring is operational, a reconciliation blocker does not terminate
-the session, which remains responsive to relevant filesystem changes. A later
-change triggers a fresh reconciliation, allowing a user to recover, for
-example, by correcting and saving a malformed fragment. Without such a change,
-live mode does not retry on a timer.
+the session, which remains responsive to filesystem hints. A later hint
+triggers a fresh reconciliation, allowing a user to recover, for example, by
+correcting and saving a malformed fragment. Without another hint, live mode
+does not retry on a timer.
 
 ### Diagnostics and shutdown
 
