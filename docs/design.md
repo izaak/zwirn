@@ -1,8 +1,13 @@
 # Zwirn
 
-`zwirn` is a command-line tool for keeping source fragments on the filesystem synchronized with monolithic Lua, Lyte, and GLSL source embedded in `.audulus4` files.
+`zwirn` is a command-line tool for keeping source fragments on the filesystem
+synchronized with monolithic Lua, Lyte, and GLSL source embedded in `.audulus4`
+files.
 
-Large source-bearing nodes can be composed from smaller files that remain convenient to edit, organize, and version in a source repository. The embedded source remains directly editable inside Audulus, and changes can flow in either direction.
+Large source-bearing nodes can be composed from smaller files that remain
+convenient to edit, organize, and version in a source repository. The embedded
+source remains directly editable inside Audulus, and changes can flow in either
+direction.
 
 Zwirn supports one-shot synchronization on macOS and Linux. macOS also
 supports foreground live synchronization.
@@ -12,7 +17,10 @@ supports foreground live synchronization.
 Each one-shot invocation or live session operates on one explicitly named
 `.audulus4` document and one source root.
 
-The source root defaults to the parent of the document path as named. An explicit `--source-root` may be absolute or relative. The document path and an explicit relative source root are resolved from the current working directory.
+The document path and any explicit relative source root are resolved from the
+current working directory. An explicit `--source-root` may be absolute or
+relative. If it is omitted, the source root is the parent of the resolved
+document path without canonicalizing that path.
 
 The source root must exist and be a directory.
 
@@ -44,7 +52,8 @@ changes for them to participate in synchronization.
 
 ## Fragments
 
-Fragments are regions of embedded source identified by Zwirn markers. Each fragment corresponds to one source file. Its marker path is its identity.
+Fragments are regions of embedded source identified by Zwirn markers. Each
+fragment corresponds to one source file. Its marker path is its identity.
 
 The general marker form is:
 
@@ -78,11 +87,14 @@ An absent hash marks an unadopted fragment:
 -- @} src/filter/svf.lua
 ```
 
-Authors seed fragments by placing unadopted markers in the appropriate source inside Audulus.
+Authors seed fragments by placing unadopted markers in the appropriate source
+inside Audulus.
 
 ### Marker grammar
 
-A marker occupies an entire line, with optional leading indentation and trailing horizontal whitespace. The containing node determines its language and comment syntax:
+A marker occupies an entire line, with optional leading indentation and
+trailing horizontal whitespace. The containing node determines its language
+and comment syntax:
 
 | Node type | Language | Comment |
 |---|---|---|
@@ -96,35 +108,64 @@ The path on a closing marker exactly matches the canonical path on its opening
 marker. A hash consists of 16 lowercase hexadecimal digits and appears only on
 a closing marker.
 
-Fragments may appear sequentially within a node. They do not nest or overlap. Orphaned, mismatched, and unterminated markers are structural errors.
+Fragments may appear sequentially within a node. They do not nest or overlap.
+Orphaned, mismatched, and unterminated markers are structural errors.
 
-Fragment source is the complete sequence of lines strictly between its marker lines. Adjacent opening and closing markers represent empty source.
+Fragment source is the complete sequence of lines strictly between its marker
+lines. Adjacent opening and closing markers represent empty source.
 
 ## Paths
 
-Marker paths are nonempty, use `/` separators, and have canonical relative form. A canonical path has no leading slash, backslash, empty segment, `.` or `..` segment, or trailing slash.
+Marker paths are nonempty, use `/` separators, and have canonical relative
+form. A canonical path has no leading slash, backslash, empty segment, `.` or
+`..` segment, or trailing slash.
 
-A canonical fragment path is resolved relative to the source root. No canonical fragment path is a strict component ancestor of another. Apart from strict ancestry and shared filesystem-file identity, distinct canonical fragment paths are independent. A fragment target lexically equal to the resolved document path is invalid. The document and existing fragment targets identify distinct filesystem files. A successful mutating command does not create a fragment target that identifies the same filesystem file as another fragment target. An existing target is a regular file. File creation may create missing parent directories.
+A canonical fragment path is resolved relative to the source root. No fragment
+path may be a strict component ancestor of another. Distinct paths are
+otherwise treated independently unless their targets identify the same
+filesystem file.
+
+A fragment target lexically equal to the resolved document path is invalid.
+The document and existing fragment targets must all identify distinct
+filesystem files. A successful mutating command does not create a fragment
+target that identifies the same filesystem file as another fragment target.
+
+An existing fragment target must be a regular file. Creating a target may also
+create missing parent directories.
 
 ## Discovery
 
-Zwirn scans the source contents of every Canvas, DSP, Shader, and Lyte DSP node in the document. Marker comments are recognized according to the language of the containing node.
+Zwirn scans the source contents of every Canvas, DSP, Shader, and Lyte DSP node
+in the document. Marker comments are recognized according to the language of
+the containing node.
 
-The discovered markers define the fragment inventory. Marker paths are unique within the document.
+The discovered markers define the fragment inventory. Marker paths are unique
+within the document.
 
-Audulus node identity, graph position, hierarchy, and other node metadata are not part of fragment identity. A source-bearing node may move or receive a new Audulus identity while its marked fragments remain the same.
+Audulus node identity, graph position, hierarchy, and other node metadata are
+not part of fragment identity. A source-bearing node may move or receive a new
+Audulus identity while its marked fragments remain the same.
 
 ## Canonical source
 
-Fragment source is `UTF-8` without a byte order mark. Its canonical representation converts `CRLF` and lone `CR` line endings to `LF` and appends an `LF` to nonempty source that lacks one. Empty source remains empty. All other Unicode code points and whitespace participate unchanged.
+Fragment source is `UTF-8` without a byte order mark. Its canonical
+representation converts `CRLF` and lone `CR` line endings to `LF`. Nonempty
+source receives a final `LF` if it lacks one; empty source remains empty. All
+other Unicode code points and whitespace participate unchanged.
 
 Classification, hashing, and transferred source use the canonical representation.
 
-The stored hash is the 64-bit prefix of the `SHA-256` digest of canonical fragment source encoded as `UTF-8`. Marker lines are excluded. The hash represents the last source contents known to be synchronized between the filesystem and the document.
+The stored hash is the 64-bit prefix of the `SHA-256` digest of canonical
+fragment source encoded as `UTF-8`. Marker lines are excluded. The hash
+represents the last source contents known to be synchronized between the
+filesystem and the document.
 
 ## Synchronization states
 
-Let `F` be canonical filesystem source, `E` canonical embedded source, and `H` the stored baseline hash. `F = E` compares canonical source. `F = H` means that the SHA-256 hash of `F` equals `H`, and likewise for `E = H`.
+Let `F` be canonical filesystem source, `E` canonical embedded source, and `H`
+the stored baseline hash. `F = E` compares canonical source directly. `F = H`
+means that the stored 64-bit prefix of the `SHA-256` digest of `F` equals `H`,
+and likewise for `E = H`.
 
 | `H` | Filesystem file | Relationship | State | Safe action |
 |---|---|---|---|---|
@@ -139,7 +180,11 @@ Let `F` be canonical filesystem source, `E` canonical embedded source, and `H` t
 | present | present | `F ≠ E`, `F = H`, `E = H` | `conflict` | manual convergence or targeted forced `embed` or `extract` |
 | present | present | `F ≠ E`, `F ≠ H`, `E ≠ H` | `conflict` | manual convergence or targeted forced `embed` or `extract` |
 
-A successful action records the hash of the synchronized canonical source in the closing marker.
+A truncated-hash collision can make unequal `F` and `E` both match `H`. Zwirn
+classifies that case as a conflict.
+
+A successful action records the hash of the synchronized canonical source in
+the closing marker.
 
 ## One-shot commands
 
@@ -155,7 +200,9 @@ With no fragment arguments, a one-shot command selects every discovered
 fragment. One or more canonical fragment paths select an exact subset. An
 unknown selected path is a command error.
 
-`--force` is available on `embed` and `extract` with explicitly selected paths. Every selected fragment must be in `conflict` or `unadopted conflict`. Forced `embed` selects filesystem source. Forced `extract` selects embedded source.
+`--force` is available on `embed` and `extract` with explicitly selected paths.
+Every selected fragment must be in `conflict` or `unadopted conflict`. Forced
+`embed` selects filesystem source. Forced `extract` selects embedded source.
 
 Mutating one-shot commands create and replace source content. Deletion is
 outside their operation.
@@ -169,16 +216,16 @@ zwirn live [--source-root DIR] DOCUMENT
 ```
 
 The document and source root follow the same resolution and validation rules
-as one-shot commands. A session uses the complete, freshly discovered fragment
-inventory.
+as one-shot commands. Each reconciliation freshly discovers the complete
+fragment inventory and applies the same safe, bidirectional behavior as
+`zwirn sync`.
 
-Each reconciliation applies the ordinary safe, bidirectional `sync` behavior;
-live mode does not add deletion. In particular, an established fragment whose
+Live mode does not add deletion. In particular, an established fragment whose
 external file is absent remains `missing`; live mode reports it and does not
 recreate it automatically.
 
-A document replaced at the configured named path remains in scope, but live
-mode does not follow a document or source root moved to another path.
+A document replaced at its configured path remains in scope, but live mode does
+not follow a document or source root moved to another path.
 
 On Linux, `live` remains visible in the command-line interface but reports that
 it is unsupported and exits with status 2.
@@ -186,9 +233,10 @@ it is unsupported and exits with status 2.
 ### Monitoring and reconciliation
 
 Live mode watches the source-root hierarchy and the parent of the configured
-document. It starts monitoring before performing an immediate initial
-reconciliation, so the initial run recovers changes made before startup without
-leaving a gap in which a new change can be missed.
+document. Monitoring starts before an immediate initial reconciliation. The
+initial reconciliation discovers the state already present at startup. A later
+change is either included in that discovery or requests another reconciliation,
+leaving no gap between monitoring and the initial run.
 
 Filesystem events are invalidation hints, not an ordered history of changes. A
 relevant hint requests a fresh reconciliation of the document and its full
@@ -198,7 +246,7 @@ Reconciliations are serialized, and multiple hints may be coalesced. A hint
 that arrives during a reconciliation guarantees at least one subsequent
 reconciliation rather than being absorbed into the active run.
 
-Indications of dropped events or a changed watched root request a full
+Indications of dropped events or a watched-root change request a full
 reconciliation. If filesystem monitoring cannot be established, live mode
 reports the failure and exits with status 2.
 
@@ -223,13 +271,23 @@ shutdown. A signal racing with the start of a reconciliation may allow that
 reconciliation to run. Once shutdown is accepted, no further reconciliation
 begins, and the process exits with status 0.
 
-Session startup and unrecoverable session failures exit with status 2.
-Reconciliation attention and recoverable blockers do not become the live
-process's exit status.
+Live mode exits with status 2 if startup fails or an unrecoverable failure ends
+the session. A reconciliation that leaves fragments requiring attention or
+encounters a recoverable blocker does not determine the live process's exit
+status.
 
 ## Validation
 
-Discovery and validation complete before writes begin. Validation covers document structure, marker structure, hashes, source encoding, source-root validity, canonical fragment paths, existing fragment-target types, managed-input identity, fragment uniqueness and component ancestry, and command selectors.
+Discovery and validation complete before writes begin. Validation covers:
+
+- document and marker structure;
+- hashes and source encoding;
+- source-root validity, canonical fragment paths, and existing fragment-target
+  types;
+- distinct filesystem identities for the document and existing fragment
+  targets;
+- unique fragment paths and the ban on strict component ancestry; and
+- command selectors.
 
 A validation failure aborts a one-shot command or the current live
 reconciliation before writing. Fragments with ordinary unresolved states are
@@ -239,11 +297,28 @@ opposite direction likewise do not prevent other safe actions.
 
 ## Writes
 
-All outputs are prepared before writing. External files are written directly in canonical fragment-path order, followed by the document. A fragment target absent during discovery is created exclusively, and its write fails if a filesystem entry occupies that path. After creating it, Zwirn checks whether any other fragment target that was absent during discovery identifies the new file. An alias is an operational failure after the new fragment has been written. Targets present during discovery use ordinary create-or-truncate behavior. Writes stop at the first operational failure. The current destination may be partially written; completed writes and created directories remain in place.
+All outputs are prepared before writing. External files are written directly in
+canonical fragment-path order, followed by the document.
 
-The document mutation set consists of fragment source and closing-marker hashes. Within source strings, all other text is preserved exactly. All other logical document data remains unchanged.
+A fragment target present during discovery uses ordinary create-or-truncate
+behavior. An absent target is created exclusively; its write fails if a
+filesystem entry has appeared at that path.
 
-Updating an existing hash replaces only its token. Establishing a hash inserts one separating space and the hash after the path on the closing marker. Existing marker indentation, comment spacing, token spacing, and trailing whitespace are preserved.
+After creating an absent target, Zwirn checks whether it identifies the same
+filesystem file as any other fragment target that was absent during discovery.
+An alias is an operational failure after the new fragment has been written.
+
+Writes stop at the first operational failure. The current destination may be
+partially written; completed writes and created directories remain in place.
+
+Document writes change only fragment source and closing-marker hashes. Within
+source strings, all other text is preserved exactly. All other logical document
+data remains unchanged.
+
+Updating an existing hash replaces only its token. Establishing a hash inserts
+one separating space and the hash after the path on the closing marker.
+Existing marker indentation, comment spacing, token spacing, and trailing
+whitespace are preserved.
 
 The prepared document is validated before writing. An operation producing no
 document change leaves the document file untouched.
@@ -253,10 +328,11 @@ document change leaves the document file untouched.
 One-shot results are ordered by canonical fragment path and written one per line
 as `PATH<TAB>RESULT`.
 
-`status` results are synchronization states. Mutating-command results are performed actions (`record`, `embed`, or `extract`) and unresolved states.
+`status` results are synchronization states. Mutating-command results are
+performed actions (`record`, `embed`, or `extract`) and unresolved states.
 
-Exit code `0` means every selected fragment is synchronized after the command.
-
-Exit code `1` means the command completed with one or more selected fragments still requiring attention.
-
-Exit code `2` means a validation or operational failure prevented normal completion.
+| Exit code | Meaning |
+|---:|---|
+| `0` | Every selected fragment is synchronized after the command. |
+| `1` | The command completed with one or more selected fragments still requiring attention. |
+| `2` | A validation or operational failure prevented normal completion. |
