@@ -17,22 +17,23 @@ supports foreground live synchronization.
 Each one-shot invocation or live session operates on one explicitly named
 `.audulus4` document and one source root.
 
-The document path and any explicit relative source root are resolved from the
-current working directory. An explicit `--source-root` may be absolute or
-relative. If it is omitted, the source root is the parent of the resolved
-document path without canonicalizing that path.
+The document path and an explicit `--source-root` may be absolute or relative.
+When a command or session starts, relative paths are resolved from the current
+working directory. If `--source-root` is omitted, the source root is the parent
+of the resolved document path without canonicalizing that path.
 
 The source root must exist and be a directory.
 
 Opening the source root establishes the directory that anchors fragment access
-for the one-shot command or live reconciliation. Fragment path resolution,
-parent-directory creation, and external writes remain beneath that directory.
-Relative symbolic links may be followed when their resolution remains beneath
-the opened root; absolute or escaping symbolic links are invalid.
+for the one-shot command or live reconciliation. Fragment target resolution,
+reads, parent-directory creation, and writes remain beneath that directory.
+Relative symbolic links are permitted only when their resolution remains
+beneath the opened root; absolute or escaping symbolic links are invalid.
 
-Filesystem behavior is defined for a trusted local workspace that remains
-stable during an individual command or reconciliation. The contents read
-during discovery define that operation's inputs.
+The filesystem contract assumes a trusted local workspace. Apart from races
+described explicitly below, behavior is unspecified if another process changes
+the workspace during an individual command or reconciliation. The contents
+read during discovery define that operation's inputs.
 
 ## Saved state and coordinated access
 
@@ -41,14 +42,16 @@ coordinated filesystem access so participating applications can mediate
 document and fragment reads and writes. Linux one-shot commands use direct
 filesystem access.
 
-The configured named paths remain fixed during a one-shot command or live
-session. Zwirn does not follow a path moved during that operation.
+The configured document and source-root paths remain fixed throughout a
+one-shot command or live session. The markers discovered for an individual
+command or reconciliation fix its fragment target paths. Zwirn does not follow
+a file or directory moved to a different path.
 
 Coordination affects only access to saved filesystem contents; other
 synchronization behavior remains unchanged. Zwirn does not inspect or protect
 unsaved state held inside Audulus or a source editor. Applications may remain
-open, but users should normally edit one representation at a time and save
-changes for them to participate in synchronization.
+open, but only saved changes participate in synchronization. Editing one
+representation at a time avoids competing saved changes.
 
 ## Fragments
 
@@ -93,8 +96,9 @@ inside Audulus.
 ### Marker grammar
 
 A marker occupies an entire line, with optional leading indentation and
-trailing horizontal whitespace. The containing node determines its language
-and comment syntax:
+trailing horizontal whitespace. In the marker grammar, horizontal whitespace
+means ASCII space or tab. The containing node determines its language and
+comment syntax:
 
 | Node type | Language | Comment |
 |---|---|---|
@@ -127,11 +131,12 @@ filesystem file.
 
 A fragment target lexically equal to the resolved document path is invalid.
 The document and existing fragment targets must all identify distinct
-filesystem files. A successful mutating command does not create a fragment
-target that identifies the same filesystem file as another fragment target.
+filesystem files. A mutating command that completes without a validation or
+operational failure does not create a fragment target that identifies the same
+filesystem file as another fragment target.
 
-An existing fragment target must be a regular file. Creating a target may also
-create missing parent directories.
+An existing fragment target must be a regular file. Creating a target first
+creates any missing parent directories.
 
 ## Discovery
 
@@ -220,9 +225,8 @@ as one-shot commands. Each reconciliation freshly discovers the complete
 fragment inventory and applies the same safe, bidirectional behavior as
 `zwirn sync`.
 
-Live mode does not add deletion. In particular, an established fragment whose
-external file is absent remains `missing`; live mode reports it and does not
-recreate it automatically.
+Live mode does not add deletion. In particular, it reports a fragment in
+`missing` state but does not recreate its external file automatically.
 
 A document replaced at its configured path remains in scope, but live mode does
 not follow a document or source root moved to another path.
@@ -233,10 +237,11 @@ it is unsupported and exits with status 2.
 ### Monitoring and reconciliation
 
 Live mode watches the source-root hierarchy and the parent of the configured
-document. Monitoring starts before an immediate initial reconciliation. The
-initial reconciliation discovers the state already present at startup. A later
-change is either included in that discovery or requests another reconciliation,
-leaving no gap between monitoring and the initial run.
+document. Monitoring starts before an immediate initial reconciliation, which
+discovers the state already present at startup. If the session continues, a
+hint delivered before or during that reconciliation remains pending for a
+subsequent reconciliation. This leaves no gap between monitoring startup and
+the initial run.
 
 Filesystem events are invalidation hints, not an ordered history of changes.
 Every hint delivered from either watched scope is relevant, including activity
@@ -253,30 +258,31 @@ Indications of dropped events or a watched-root change request a full
 reconciliation. If filesystem monitoring cannot be established, live mode
 reports the failure and exits with status 2.
 
-Once monitoring is operational, a reconciliation blocker does not terminate
-the session, which remains responsive to filesystem hints. A later hint
-triggers a fresh reconciliation, allowing a user to recover, for example, by
-correcting and saving a malformed fragment. Without another hint, live mode
-does not retry on a timer.
+Once monitoring is operational, unresolved fragment states and validation or
+operational failures are nonfatal reconciliation blockers. A blocker does not
+terminate the session, which remains responsive to filesystem hints. A later
+hint triggers a fresh reconciliation, allowing another attempt after, for
+example, a user corrects and saves a malformed fragment. Without another hint,
+live mode does not retry on a timer.
 
 ### Diagnostics and shutdown
 
 Live diagnostics are written to standard error for the foreground human
-workflow, not as a stable machine-readable protocol. They report meaningful
-session changes, including startup, performed actions, blockers, recovery from
-blockers, and shutdown. Routine reconciliations that perform no action and do
-not change the reported state remain silent. Exact wording and line structure
-are not part of the contract.
+workflow, not as a stable machine-readable protocol. They report startup,
+shutdown, performed actions, new or changed blockers, and recovery from
+blockers. Routine reconciliations that perform no action and do not change the
+reported state remain silent. Exact wording and line structure are not part of
+the contract.
 
 `SIGINT` and `SIGTERM` request an orderly shutdown. An idle session stops
-promptly. An active reconciliation finishes before exit, which may delay
-shutdown. A signal racing with the start of a reconciliation may allow that
-reconciliation to run. Once shutdown is accepted, no further reconciliation
-begins, and the process exits with status 0.
+without waiting for filesystem activity. An active reconciliation finishes
+before exit, which may delay shutdown. A signal racing with the start of a
+reconciliation may allow that reconciliation to run. Once shutdown is accepted,
+no further reconciliation begins, and the process exits with status 0.
 
-Live mode exits with status 2 if startup fails or an unrecoverable failure ends
-the session. A reconciliation that leaves fragments requiring attention or
-encounters a recoverable blocker does not determine the live process's exit
+Live mode exits with status 2 if startup fails, if Zwirn detects that signal
+handling or internal event delivery has stopped, or if it cannot write
+diagnostics. Reconciliation blockers do not determine the live process's exit
 status.
 
 ## Validation
@@ -293,7 +299,8 @@ Discovery and validation complete before writes begin. Validation covers:
 - command selectors.
 
 A validation failure aborts a one-shot command or the current live
-reconciliation before writing. Fragments with ordinary unresolved states are
+reconciliation before writing. An unresolved synchronization state is a
+per-fragment result rather than a validation failure. Such fragments are
 processed independently, allowing safe actions to proceed alongside conflicts
 and missing files. For a directional one-shot command, states belonging to the
 opposite direction likewise do not prevent other safe actions.
@@ -303,8 +310,8 @@ opposite direction likewise do not prevent other safe actions.
 All outputs are prepared before writing. External files are written directly in
 canonical fragment-path order, followed by the document.
 
-A fragment target present during discovery uses ordinary create-or-truncate
-behavior. An absent target is created exclusively; its write fails if a
+Zwirn opens a fragment target present during discovery with create-or-truncate
+semantics. An absent target is created exclusively; its write fails if a
 filesystem entry has appeared at that path.
 
 After creating an absent target, Zwirn checks whether it identifies the same
@@ -338,4 +345,4 @@ performed actions (`record`, `embed`, or `extract`) and unresolved states.
 |---:|---|
 | `0` | Every selected fragment is synchronized after the command. |
 | `1` | The command completed with one or more selected fragments still requiring attention. |
-| `2` | A validation or operational failure prevented normal completion. |
+| `2` | The command ended with a validation or operational failure. |

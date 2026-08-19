@@ -9,7 +9,7 @@ The command-line layer converts parser-specific values into parser-independent
 domain values before calling library code. Baseline hashes likewise use a
 Zwirn-owned type; SHA-2 digest types remain inside the hashing implementation.
 Validation and operational failures are typed errors, while unresolved
-synchronization states are ordinary results.
+synchronization states are returned as domain results rather than errors.
 
 ## Synchronization engine
 
@@ -27,12 +27,12 @@ the entire selection before constructing any actions.
 
 ### Containment and identity
 
-`cap-std` opens the source root once as a directory capability: a directory
-handle that anchors relative access. The inventory retains that handle through
-commit, and every fragment read and write uses a path relative to it. Opening
-fixes the anchor even when the supplied source-root path traverses symbolic links;
-containment does not exclude mounted subtrees or hard links to files outside
-the tree.
+For each engine execution, `cap-std` opens the source root once as a directory
+capability: a directory handle that anchors relative access. The inventory
+retains that handle through commit, and every fragment read and write uses a
+path relative to it. Opening fixes the anchor even when the supplied source-root
+path traverses symbolic links; containment does not exclude mounted subtrees or
+hard links to files outside the tree.
 
 Component ancestry is a property of marker path spellings. It is checked
 without case folding, Unicode normalization, or symbolic-link inference.
@@ -48,23 +48,24 @@ written.
 
 ### Access policy
 
-Complete file reads and writes pass through an internal, statically dispatched
-access policy. Named paths tell the policy which access to coordinate, while
-fragment filesystem operations retain their capability-relative paths.
-Parent-directory handling remains outside the policy. Engine execution selects
-coordinated access on macOS and direct access on other targets.
+Document and fragment reads and writes pass through an internal, statically
+dispatched access policy. Named paths tell the policy which access to
+coordinate, while fragment filesystem operations retain their
+capability-relative paths. Parent-directory handling remains outside the
+policy. Engine execution selects coordinated access on macOS and direct access
+on other targets.
 
-The macOS policy constructs a short-lived `NSFileCoordinator` without a
-Zwirn-owned file presenter and uses default read and write options. It requests
-coordination even for fragment paths that do not yet exist. If the coordinator
-supplies an accessor path different from the requested path or otherwise fails
-before the filesystem operation begins, Zwirn does not retry through direct
-access. It never substitutes that accessor path for a fragment's
+The macOS policy constructs a new `NSFileCoordinator` for each read or write,
+without a Zwirn-owned file presenter, and uses default read and write options.
+It requests coordination even for fragment paths that do not yet exist. If the
+coordinator supplies an accessor path different from the requested path or
+otherwise fails before the filesystem operation begins, Zwirn does not retry
+through direct access. It never substitutes that accessor path for a fragment's
 capability-relative path.
 
 Coordination failures that occur before a filesystem operation remain distinct
 from failures returned by the operation itself. Once the operation begins, its
-result is authoritative; commit failures retain the paths written earlier. The
+result is authoritative. Commit failures retain the paths written earlier. The
 Objective-C bridge catches Objective-C exceptions and Rust panics before either
 can cross the language boundary. It represents paths as filesystem bytes so
 non-UTF-8 paths survive the bridge. The bridge and its Foundation and Core
@@ -73,9 +74,10 @@ target rather than the host SDK.
 
 ## ADLS source fields
 
-Each entry in the ADLS root `PatchObject` vector has a document-local index.
-Zwirn uses that index as a node handle and rejects repeated table references, so
-every accepted handle names a distinct, independently rewritable object.
+Zwirn creates a node handle only for a supported source-bearing `PatchObject`
+entry with a present `f10` field. The handle uses that entry's document-local
+index in the ADLS root vector. Repeated table references are rejected, so every
+handle names a distinct, independently rewritable object.
 
 To replace source, Zwirn appends new string data and redirects the object's
 `f10` source field rather than rebuilding the FlatBuffer. Audulus compacts
@@ -87,14 +89,15 @@ layout is in the [ADLS code reference](../reference/adls-code.md).
 
 ### Platform and reuse
 
-The CLI recognizes `live` on every target, but the private live-session module
-and its macOS-specific dependencies compile only on macOS.
+The CLI recognizes `live` on both supported targets, but the private
+live-session module and its macOS-specific dependencies compile only on macOS.
 
 Each reconciliation calls the public one-shot engine with the session's fixed
 document and source-root paths, no selectors, and safe `sync`; live mode has no
 parallel synchronization implementation. The document-extension check runs
-before the long-lived session machinery starts, while checks whose outcomes can
-change remain inside each reconciliation.
+before the long-lived session machinery because the configured pathname is
+fixed. Validation that depends on document or filesystem contents remains
+inside each reconciliation.
 
 ### Scheduling
 
