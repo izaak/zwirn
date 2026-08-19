@@ -8,6 +8,9 @@
 
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
+mod macos;
+
 const COALESCING_WINDOW: Duration = Duration::from_millis(50);
 
 /// Work for the live-session driver to perform after a scheduler transition.

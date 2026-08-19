@@ -57,6 +57,7 @@ pub struct CoordinatedAccessFailure {
 }
 
 impl CoordinatedAccessFailure {
+    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn new(kind: AccessKind, path: PathBuf, reason: CoordinationFailure) -> Self {
         Self { kind, path, reason }
     }

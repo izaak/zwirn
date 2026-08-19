@@ -6,6 +6,8 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-changed=native/macos/coordinated_access.h");
     println!("cargo:rerun-if-changed=native/macos/coordinated_access.m");
+    println!("cargo:rerun-if-changed=native/macos/session_monitor.h");
+    println!("cargo:rerun-if-changed=native/macos/session_monitor.c");
     for variable in ["CC", "AR", "MACOSX_DEPLOYMENT_TARGET"] {
         println!("cargo:rerun-if-env-changed={variable}");
     }
@@ -16,40 +18,42 @@ fn main() {
 
     let target = env::var("TARGET").expect("Cargo sets TARGET");
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo sets OUT_DIR"));
-    let object = out_dir.join("coordinated_access.o");
     let archive = out_dir.join("libzwirn_macos_access.a");
     let compiler = target_tool("CC", &target).unwrap_or_else(|| OsString::from("cc"));
     let archiver = target_tool("AR", &target).unwrap_or_else(|| OsString::from("ar"));
     let deployment_target = deployment_target(&target);
 
-    let mut compile = Command::new(compiler);
-    compile.args([
-        "-std=c11",
-        "-Wall",
-        "-Wextra",
-        "-Werror",
-        "-fblocks",
-        "-fno-objc-arc",
-        "-fobjc-exceptions",
-        "-c",
-        "native/macos/coordinated_access.m",
-        "-o",
-    ]);
-    compile.arg(&object);
-    compile.arg(format!("-mmacosx-version-min={deployment_target}"));
-    match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
-        Ok("aarch64") => {
-            compile.args(["-arch", "arm64"]);
+    let sources: [(&str, &str, &[&str]); 2] = [
+        (
+            "coordinated_access",
+            "native/macos/coordinated_access.m",
+            &["-fblocks", "-fno-objc-arc", "-fobjc-exceptions"],
+        ),
+        ("session_monitor", "native/macos/session_monitor.c", &[]),
+    ];
+    let mut objects = Vec::new();
+    for (name, source, language_flags) in sources {
+        let object = out_dir.join(format!("{name}.o"));
+        let mut compile = Command::new(&compiler);
+        compile.args(["-std=c11", "-Wall", "-Wextra", "-Werror"]);
+        compile.args(language_flags);
+        compile.arg("-c").arg(source).arg("-o").arg(&object);
+        compile.arg(format!("-mmacosx-version-min={deployment_target}"));
+        match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+            Ok("aarch64") => {
+                compile.args(["-arch", "arm64"]);
+            }
+            Ok("x86_64") => {
+                compile.args(["-arch", "x86_64"]);
+            }
+            _ => {}
         }
-        Ok("x86_64") => {
-            compile.args(["-arch", "x86_64"]);
-        }
-        _ => {}
+        run(&mut compile, &format!("compile the macOS {name} bridge"));
+        objects.push(object);
     }
-    run(&mut compile, "compile the macOS coordination bridge");
 
     let mut archive_command = Command::new(archiver);
-    archive_command.arg("crs").arg(&archive).arg(&object);
+    archive_command.arg("crs").arg(&archive).args(&objects);
     run(
         &mut archive_command,
         "archive the macOS coordination bridge",
@@ -59,6 +63,7 @@ fn main() {
     println!("cargo:rustc-link-lib=static=zwirn_macos_access");
     println!("cargo:rustc-link-lib=framework=Foundation");
     println!("cargo:rustc-link-lib=framework=CoreFoundation");
+    println!("cargo:rustc-link-lib=framework=CoreServices");
 }
 
 fn target_tool(name: &str, target: &str) -> Option<OsString> {

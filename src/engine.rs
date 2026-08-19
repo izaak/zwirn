@@ -435,6 +435,7 @@ pub struct CoordinationError {
 }
 
 impl CoordinationError {
+    #[cfg(any(target_os = "macos", test))]
     fn new(failure: CoordinatedAccessFailure, completed: Vec<FragmentPath>) -> Self {
         Self { completed, failure }
     }
