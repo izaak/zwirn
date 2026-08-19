@@ -14,6 +14,13 @@ This document records implementation decisions as Zwirn develops. `docs/design.m
 
 `tempfile` provides isolated workspaces for filesystem tests.
 
+`signal-hook` owns macOS live-mode `SIGINT` and `SIGTERM` registration through
+a blocking iterator with an explicit close handle. A dedicated iterator thread
+records the first signal in shared shutdown state and issues a bounded wake;
+orderly teardown closes and joins that thread while leaving signal dispositions
+captured through imminent process exit. It is compiled only for macOS, so
+Linux's unsupported live command does not acquire signal machinery.
+
 ## Filesystem I/O
 
 Zwirn uses whole-file reads and prepares outputs in memory.

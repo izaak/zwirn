@@ -47,11 +47,12 @@ fragment inventory. Implementations may filter obviously unrelated hints and
 may reconcile more often than strictly necessary; event delivery and batching
 are not user-visible transactions.
 
-Reconciliations are serialized. The first pending hint starts a short
-coalescing window; later hints join that window without postponing its end. The
-exact interval is not a timing guarantee. A hint that arrives during a
-reconciliation guarantees a subsequent reconciliation rather than being
-absorbed into the active run.
+Reconciliations are serialized. Implementations may briefly coalesce hints,
+but the batching policy and exact interval are not behavioral guarantees. A
+hint that arrives during a reconciliation guarantees at least one subsequent
+reconciliation rather than being absorbed into the active run. Processing of
+hints and control requests may be deferred until a synchronous reconciliation
+returns.
 
 The foreground session starts its FSEvents stream from the current event
 position. It has no routine polling path and persists no event cursor. Dropped
@@ -76,9 +77,11 @@ state remain silent. Exact wording and line structure are not part of the
 target contract.
 
 `SIGINT` and `SIGTERM` request an orderly shutdown. An idle session stops
-promptly. An active synchronous reconciliation finishes, no further
-reconciliation begins, and the process then exits with status 0. Live mode does
-not add cancellation inside reconciliation.
+promptly. An active synchronous reconciliation finishes, and the request may be
+acted on after it returns. A shutdown request concurrent with the start of a
+reconciliation may be ordered on either side of that start. Once the request is
+ordered, no later reconciliation begins, and the process exits with status 0.
+Live mode does not add cancellation inside reconciliation.
 
 ## First-version limits
 
