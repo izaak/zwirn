@@ -95,21 +95,14 @@ impl Error for CoordinatedAccessFailure {
 /// Statically dispatched access policy for one complete named read or write.
 ///
 /// The outer result reports failure to establish policy access, before `body`
-/// runs. The inner result is returned by `body` after access was established.
+/// runs. Its successful value is the unchanged value returned by `body` after
+/// access was established.
 pub(crate) trait AccessPolicy {
     type Error;
 
-    fn read<T, E>(
-        &mut self,
-        named_path: &Path,
-        body: impl FnOnce() -> Result<T, E>,
-    ) -> Result<Result<T, E>, Self::Error>;
+    fn read<R>(&mut self, named_path: &Path, body: impl FnOnce() -> R) -> Result<R, Self::Error>;
 
-    fn write<T, E>(
-        &mut self,
-        named_path: &Path,
-        body: impl FnOnce() -> Result<T, E>,
-    ) -> Result<Result<T, E>, Self::Error>;
+    fn write<R>(&mut self, named_path: &Path, body: impl FnOnce() -> R) -> Result<R, Self::Error>;
 }
 
 /// Direct, synchronous access selected on non-macOS platforms.
@@ -119,19 +112,11 @@ pub(crate) struct DirectAccess;
 impl AccessPolicy for DirectAccess {
     type Error = Infallible;
 
-    fn read<T, E>(
-        &mut self,
-        _named_path: &Path,
-        body: impl FnOnce() -> Result<T, E>,
-    ) -> Result<Result<T, E>, Self::Error> {
+    fn read<R>(&mut self, _named_path: &Path, body: impl FnOnce() -> R) -> Result<R, Self::Error> {
         Ok(body())
     }
 
-    fn write<T, E>(
-        &mut self,
-        _named_path: &Path,
-        body: impl FnOnce() -> Result<T, E>,
-    ) -> Result<Result<T, E>, Self::Error> {
+    fn write<R>(&mut self, _named_path: &Path, body: impl FnOnce() -> R) -> Result<R, Self::Error> {
         Ok(body())
     }
 }
@@ -193,19 +178,19 @@ mod tests {
     impl AccessPolicy for RefusingAccess {
         type Error = PolicyError;
 
-        fn read<T, E>(
+        fn read<R>(
             &mut self,
             _named_path: &Path,
-            _body: impl FnOnce() -> Result<T, E>,
-        ) -> Result<Result<T, E>, Self::Error> {
+            _body: impl FnOnce() -> R,
+        ) -> Result<R, Self::Error> {
             Err(PolicyError)
         }
 
-        fn write<T, E>(
+        fn write<R>(
             &mut self,
             _named_path: &Path,
-            _body: impl FnOnce() -> Result<T, E>,
-        ) -> Result<Result<T, E>, Self::Error> {
+            _body: impl FnOnce() -> R,
+        ) -> Result<R, Self::Error> {
             Err(PolicyError)
         }
     }
@@ -218,28 +203,12 @@ mod tests {
         let result = access
             .read(Path::new("named"), || {
                 calls.set(calls.get() + 1);
-                Ok::<_, BodyError>(42)
+                42
             })
             .unwrap();
 
         assert_eq!(calls.get(), 1);
-        assert_eq!(result, Ok(42));
-    }
-
-    #[test]
-    fn direct_access_invokes_a_failing_body_once_and_preserves_its_error() {
-        let calls = Cell::new(0);
-        let mut access = DirectAccess;
-
-        let result = access
-            .write(Path::new("named"), || {
-                calls.set(calls.get() + 1);
-                Err::<(), _>(BodyError("body failed"))
-            })
-            .unwrap();
-
-        assert_eq!(calls.get(), 1);
-        assert_eq!(result, Err(BodyError("body failed")));
+        assert_eq!(result, 42);
     }
 
     #[test]

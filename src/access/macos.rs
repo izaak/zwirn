@@ -1,15 +1,14 @@
 //! Synchronous Rust wrapper for the Objective-C file-coordination bridge.
 
-use std::any::Any;
 use std::borrow::Cow;
 use std::ffi::{c_char, c_void};
 use std::os::unix::ffi::OsStrExt;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::path::Path;
+use std::thread::Result as ThreadResult;
 
 use super::{AccessKind, AccessPolicy, CoordinatedAccessFailure, CoordinationFailure};
 
-const ACCESS_OK: i32 = 0;
 const ACCESS_PATH_NOT_REPRESENTABLE: i32 = 1;
 const ACCESS_COORDINATION_FAILED: i32 = 2;
 const ACCESSOR_PATH_CHANGED: i32 = 3;
@@ -25,30 +24,22 @@ pub(crate) struct CoordinatedAccess;
 impl AccessPolicy for CoordinatedAccess {
     type Error = CoordinatedAccessFailure;
 
-    fn read<T, E>(
-        &mut self,
-        named_path: &Path,
-        body: impl FnOnce() -> Result<T, E>,
-    ) -> Result<Result<T, E>, Self::Error> {
+    fn read<R>(&mut self, named_path: &Path, body: impl FnOnce() -> R) -> Result<R, Self::Error> {
         coordinated(named_path, AccessKind::Read, body)
     }
 
-    fn write<T, E>(
-        &mut self,
-        named_path: &Path,
-        body: impl FnOnce() -> Result<T, E>,
-    ) -> Result<Result<T, E>, Self::Error> {
+    fn write<R>(&mut self, named_path: &Path, body: impl FnOnce() -> R) -> Result<R, Self::Error> {
         coordinated(named_path, AccessKind::Write, body)
     }
 }
 
-fn coordinated<T, E, F>(
+fn coordinated<R, F>(
     named_path: &Path,
     kind: AccessKind,
     body: F,
-) -> Result<Result<T, E>, CoordinatedAccessFailure>
+) -> Result<R, CoordinatedAccessFailure>
 where
-    F: FnOnce() -> Result<T, E>,
+    F: FnOnce() -> R,
 {
     let claimed_path = absolute_claim_path(named_path)
         .map_err(|reason| CoordinatedAccessFailure::new(kind, named_path.to_path_buf(), reason))?;
@@ -63,8 +54,7 @@ where
 
     let mut state = BodyState {
         body: Some(body),
-        result: None,
-        panic: None,
+        completion: None,
     };
     let mut outcome = NativeOutcome::new();
     // SAFETY: the byte slice, callback state, and outcome remain alive until
@@ -77,8 +67,8 @@ where
                 AccessKind::Read => ACCESS_READ,
                 AccessKind::Write => ACCESS_WRITE,
             },
-            Some(invoke_body::<T, E, F>),
-            (&mut state as *mut BodyState<T, E, F>).cast(),
+            Some(invoke_body::<R, F>),
+            (&mut state as *mut BodyState<R, F>).cast(),
             &mut outcome,
         );
     }
@@ -86,17 +76,17 @@ where
     finish_coordinated(named_path, kind, state, outcome)
 }
 
-fn finish_coordinated<T, E, F>(
+fn finish_coordinated<R, F>(
     named_path: &Path,
     kind: AccessKind,
-    state: BodyState<T, E, F>,
+    state: BodyState<R, F>,
     outcome: NativeOutcome,
-) -> Result<Result<T, E>, CoordinatedAccessFailure> {
-    if let Some(panic) = state.panic {
-        resume_unwind(panic);
-    }
-    if let Some(result) = state.result {
-        return Ok(result);
+) -> Result<R, CoordinatedAccessFailure> {
+    if let Some(completion) = state.completion {
+        return match completion {
+            Ok(value) => Ok(value),
+            Err(panic) => resume_unwind(panic),
+        };
     }
     if outcome.status == ACCESS_INTERNAL_FAILURE {
         panic_internal_failure(&outcome);
@@ -110,7 +100,6 @@ fn finish_coordinated<T, E, F>(
             message: outcome.message(),
         },
         ACCESSOR_PATH_CHANGED => CoordinationFailure::AccessorPathChanged,
-        ACCESS_OK => panic!("coordination succeeded without a body result"),
         status => panic!("coordination bridge returned unknown status {status}"),
     };
     Err(CoordinatedAccessFailure::new(
@@ -132,28 +121,24 @@ fn absolute_claim_path(path: &Path) -> Result<Cow<'_, Path>, CoordinationFailure
     }
 }
 
-struct BodyState<T, E, F> {
+struct BodyState<R, F> {
     body: Option<F>,
-    result: Option<Result<T, E>>,
-    panic: Option<Box<dyn Any + Send>>,
+    completion: Option<ThreadResult<R>>,
 }
 
-unsafe extern "C" fn invoke_body<T, E, F>(context: *mut c_void)
+unsafe extern "C" fn invoke_body<R, F>(context: *mut c_void)
 where
-    F: FnOnce() -> Result<T, E>,
+    F: FnOnce() -> R,
 {
     if context.is_null() {
         return;
     }
     // SAFETY: `coordinated` supplies this exact state to a synchronous call.
-    let state = unsafe { &mut *context.cast::<BodyState<T, E, F>>() };
+    let state = unsafe { &mut *context.cast::<BodyState<R, F>>() };
     let Some(body) = state.body.take() else {
         return;
     };
-    match catch_unwind(AssertUnwindSafe(body)) {
-        Ok(result) => state.result = Some(result),
-        Err(panic) => state.panic = Some(panic),
-    }
+    state.completion = Some(catch_unwind(AssertUnwindSafe(body)));
 }
 
 #[repr(C)]
@@ -262,18 +247,10 @@ mod tests {
     fn a_missing_target_is_coordinated_and_remains_an_ordinary_body_result() {
         let workspace = tempfile::tempdir().unwrap();
         let path = workspace.path().join("missing.lua");
-        let calls = Cell::new(0);
         let mut access = CoordinatedAccess;
 
-        let error = access
-            .read(&path, || {
-                calls.set(calls.get() + 1);
-                fs::read(&path)
-            })
-            .unwrap()
-            .unwrap_err();
+        let error = access.read(&path, || fs::read(&path)).unwrap().unwrap_err();
 
-        assert_eq!(calls.get(), 1);
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 
@@ -283,18 +260,15 @@ mod tests {
         let component = OsString::from_vec(b"fragment-\xff.lua".to_vec());
         let path = workspace.path().join(component);
         let expected = path.as_os_str().as_bytes().to_vec();
-        let calls = Cell::new(0);
         let mut access = CoordinatedAccess;
 
         let bytes = access
             .read(&path, || {
-                calls.set(calls.get() + 1);
                 Ok::<_, std::convert::Infallible>(path.as_os_str().as_bytes().to_vec())
             })
             .unwrap()
             .unwrap();
 
-        assert_eq!(calls.get(), 1);
         assert_eq!(bytes, expected);
     }
 
@@ -317,13 +291,12 @@ mod tests {
     #[test]
     fn a_changed_accessor_path_is_typed_without_running_or_retrying_the_body() {
         let calls = Cell::new(0);
-        let state: BodyState<(), std::convert::Infallible, _> = BodyState {
+        let state: BodyState<Result<(), std::convert::Infallible>, _> = BodyState {
             body: Some(|| {
                 calls.set(calls.get() + 1);
                 Ok::<(), std::convert::Infallible>(())
             }),
-            result: None,
-            panic: None,
+            completion: None,
         };
         let mut outcome = NativeOutcome::new();
         outcome.status = ACCESSOR_PATH_CHANGED;

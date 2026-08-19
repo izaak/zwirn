@@ -8,8 +8,8 @@
 extern "C" {
 #endif
 
+/* Rust consults status only when its callback recorded no completion. */
 enum {
-    ZWIRN_ACCESS_OK = 0,
     ZWIRN_ACCESS_PATH_NOT_REPRESENTABLE = 1,
     ZWIRN_ACCESS_COORDINATION_FAILED = 2,
     ZWIRN_ACCESSOR_PATH_CHANGED = 3,

@@ -87,11 +87,6 @@ void zwirn_coordinated_access(
                     path_length
                 )) {
                 outcome->status = ZWIRN_ACCESS_PATH_NOT_REPRESENTABLE;
-                zwirn_copy_bytes(
-                    outcome->message,
-                    sizeof(outcome->message),
-                    "Foundation cannot represent the named filesystem path exactly"
-                );
                 return;
             }
 
@@ -109,15 +104,9 @@ void zwirn_coordinated_access(
                 }
                 if (!zwirn_path_matches(accessor_path, path, path_length)) {
                     outcome->status = ZWIRN_ACCESSOR_PATH_CHANGED;
-                    zwirn_copy_bytes(
-                        outcome->message,
-                        sizeof(outcome->message),
-                        "Foundation supplied a changed accessor path"
-                    );
                     return;
                 }
                 body(context);
-                outcome->status = ZWIRN_ACCESS_OK;
             };
 
             if (intent == ZWIRN_ACCESS_READ) {

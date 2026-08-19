@@ -671,19 +671,19 @@ mod tests {
     impl AccessPolicy for RefuseAccessTo {
         type Error = AccessRefused;
 
-        fn read<T, E>(
+        fn read<R>(
             &mut self,
             _named_path: &Path,
-            body: impl FnOnce() -> Result<T, E>,
-        ) -> Result<Result<T, E>, Self::Error> {
+            body: impl FnOnce() -> R,
+        ) -> Result<R, Self::Error> {
             Ok(body())
         }
 
-        fn write<T, E>(
+        fn write<R>(
             &mut self,
             named_path: &Path,
-            body: impl FnOnce() -> Result<T, E>,
-        ) -> Result<Result<T, E>, Self::Error> {
+            body: impl FnOnce() -> R,
+        ) -> Result<R, Self::Error> {
             if named_path == self.path {
                 Err(AccessRefused)
             } else {

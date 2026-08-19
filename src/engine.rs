@@ -98,11 +98,10 @@ pub fn execute(request: Request<'_>) -> Result<Report, Error> {
         match execute_with_access(request, &mut access) {
             Ok(report) => Ok(report),
             Err(PolicyFailure::Operation(error)) => Err(error),
-            Err(PolicyFailure::Access(EngineAccessFailure::Discovery(error))) => match error {},
-            Err(PolicyFailure::Access(EngineAccessFailure::Commit(CommitAccessFailure {
+            Err(PolicyFailure::Access(EngineAccessFailure {
                 source,
                 completed: _completed,
-            }))) => match source {},
+            })) => match source {},
         }
     }
 }
@@ -114,20 +113,32 @@ fn coordinated_result(
     match result {
         Ok(report) => Ok(report),
         Err(PolicyFailure::Operation(error)) => Err(error),
-        Err(PolicyFailure::Access(EngineAccessFailure::Discovery(failure))) => {
-            Err(CoordinationError::new(failure, Vec::new()).into())
+        Err(PolicyFailure::Access(EngineAccessFailure { source, completed })) => {
+            Err(CoordinationError::new(source, completed).into())
         }
-        Err(PolicyFailure::Access(EngineAccessFailure::Commit(CommitAccessFailure {
-            source,
-            completed,
-        }))) => Err(CoordinationError::new(source, completed).into()),
     }
 }
 
 #[derive(Debug)]
-pub(crate) enum EngineAccessFailure<A> {
-    Discovery(A),
-    Commit(CommitAccessFailure<A>),
+pub(crate) struct EngineAccessFailure<A> {
+    source: A,
+    completed: Vec<FragmentPath>,
+}
+
+impl<A> EngineAccessFailure<A> {
+    fn discovery(source: A) -> Self {
+        Self {
+            source,
+            completed: Vec::new(),
+        }
+    }
+
+    fn commit(failure: CommitAccessFailure<A>) -> Self {
+        Self {
+            source: failure.source,
+            completed: failure.completed,
+        }
+    }
 }
 
 pub(crate) fn execute_with_access<P: AccessPolicy>(
@@ -140,7 +151,7 @@ pub(crate) fn execute_with_access<P: AccessPolicy>(
         Inventory::discover_for_document_with_access(&paths.source_root, &paths.document, access)
             .map_err(|failure| {
             failure
-                .map_access(EngineAccessFailure::Discovery)
+                .map_access(EngineAccessFailure::discovery)
                 .map_operation(Error::from)
         })?;
 
@@ -328,7 +339,7 @@ fn mutate_with_access<P: AccessPolicy>(
     )
     .map_err(|failure| {
         failure
-            .map_access(EngineAccessFailure::Commit)
+            .map_access(EngineAccessFailure::commit)
             .map_operation(Error::from)
     })?;
 
@@ -560,21 +571,21 @@ mod tests {
     impl AccessPolicy for RecordingAccess {
         type Error = Infallible;
 
-        fn read<T, E>(
+        fn read<R>(
             &mut self,
             named_path: &Path,
-            body: impl FnOnce() -> Result<T, E>,
-        ) -> Result<Result<T, E>, Self::Error> {
+            body: impl FnOnce() -> R,
+        ) -> Result<R, Self::Error> {
             self.events
                 .push(AccessEvent::Read(named_path.to_path_buf()));
             Ok(body())
         }
 
-        fn write<T, E>(
+        fn write<R>(
             &mut self,
             named_path: &Path,
-            body: impl FnOnce() -> Result<T, E>,
-        ) -> Result<Result<T, E>, Self::Error> {
+            body: impl FnOnce() -> R,
+        ) -> Result<R, Self::Error> {
             self.events
                 .push(AccessEvent::Write(named_path.to_path_buf()));
             Ok(body())
@@ -623,7 +634,27 @@ mod tests {
     }
 
     #[test]
-    fn coordinated_commit_failure_keeps_completed_fragments_in_the_public_error() {
+    fn coordinated_failures_keep_completed_fragment_provenance() {
+        let discovery_failure = CoordinatedAccessFailure::new(
+            AccessKind::Read,
+            PathBuf::from("blocked.audulus4"),
+            CoordinationFailure::Refused {
+                domain: "NSCocoaErrorDomain".into(),
+                code: 256,
+                message: "access refused".into(),
+            },
+        );
+        let discovery_result: Result<
+            Report,
+            PolicyFailure<EngineAccessFailure<CoordinatedAccessFailure>, Error>,
+        > = Err(PolicyFailure::Access(EngineAccessFailure::discovery(
+            discovery_failure,
+        )));
+
+        let discovery_error = coordinated_result(discovery_result).unwrap_err();
+
+        assert!(discovery_error.committed_external().is_empty());
+
         let completed = FragmentPath::try_from("already-written.lua").unwrap();
         let failure = CoordinatedAccessFailure::new(
             AccessKind::Write,
@@ -637,7 +668,7 @@ mod tests {
         let result: Result<
             Report,
             PolicyFailure<EngineAccessFailure<CoordinatedAccessFailure>, Error>,
-        > = Err(PolicyFailure::Access(EngineAccessFailure::Commit(
+        > = Err(PolicyFailure::Access(EngineAccessFailure::commit(
             CommitAccessFailure {
                 source: failure,
                 completed: vec![completed.clone()],
