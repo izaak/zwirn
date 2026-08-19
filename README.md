@@ -5,7 +5,8 @@ ordinary source files. Embedded source remains editable in Audulus while also
 available to other editors and version control. Zwirn transfers unambiguous
 changes in either direction.
 
-Zwirn supports macOS and Linux. It is pre-release software intended for stable,
+Zwirn supports one-shot synchronization on macOS and Linux. macOS also supports
+a foreground `live` session. It is pre-release software intended for stable,
 trusted, version-controlled workspaces.
 
 ## Install from source
@@ -27,8 +28,8 @@ local gain = 0.5
 ```
 
 Zwirn synchronizes saved files on disk. Save changes in Audulus and in open
-source files before running `status`, `embed`, `extract`, or `sync`; Audulus and
-source editors may remain open:
+source files before running a one-shot command; Audulus and source editors may
+remain open:
 
 ```console
 zwirn sync patch.audulus4
@@ -47,16 +48,23 @@ copy, then run `sync` again.
 ## Commands
 
 ```text
-zwirn <COMMAND> [OPTIONS] <DOCUMENT> [FRAGMENT]...
+zwirn <COMMAND>
 
 status   inspect without changes
 embed    source files → .audulus4
 extract  source files ← .audulus4
 sync     source files ↔ .audulus4
+live     reconcile saved changes in the foreground (macOS only)
 ```
 
-Each `FRAGMENT` argument is an exact marker path relative to the source root.
-Pass one or more to select an exact subset; omit them to select every fragment.
+The one-shot commands accept:
+
+```text
+zwirn <status|embed|extract|sync> [--source-root DIR] DOCUMENT [FRAGMENT]...
+```
+
+Each `FRAGMENT` is an exact marker path relative to the source root. Pass one or
+more to select an exact subset; omit them to select every fragment.
 
 ```console
 zwirn embed patch.audulus4 src/filter.lua
@@ -68,6 +76,39 @@ root with `--source-root`:
 ```console
 zwirn sync --source-root sources patch.audulus4
 ```
+
+## Live synchronization on macOS
+
+`live` starts a foreground session for one document and its complete fragment
+inventory:
+
+```text
+zwirn live [--source-root DIR] DOCUMENT
+```
+
+For example:
+
+```console
+zwirn live --source-root sources patch.audulus4
+```
+
+The session starts filesystem monitoring before an immediate safe,
+bidirectional synchronization. It then reconciles newly saved changes under the
+source root or at the document path. Live mode uses the same conflict,
+containment, coordinated-access, validation, and ordered-write behavior as
+`sync`; it neither forces conflicts nor recreates an established fragment whose
+external file is missing.
+
+Reconciliation failures are reported without ending an operational session. A
+later filesystem change requests another reconciliation, so correcting and
+saving a blocked document or fragment can recover the session. There is no
+timed retry when nothing changes. Routine reconciliations with no action or
+reported-state change remain quiet.
+
+Press Control-C or send `SIGTERM` to request an orderly shutdown. An active
+reconciliation finishes before the process exits successfully. Live mode is
+visible but unsupported on Linux, where invoking it reports an error and exits
+with status 2.
 
 ## Markers
 
@@ -100,7 +141,9 @@ forced `extract` selects the embedded copy.
 ## Output and exit status
 
 Results are ordered by fragment path and written one per line as
-`PATH<TAB>RESULT`.
+`PATH<TAB>RESULT` for one-shot commands. Live mode writes human-oriented session
+diagnostics to standard error instead of defining a machine-readable output
+format.
 
 ```text
 0   every selected fragment is synchronized
@@ -110,7 +153,9 @@ Results are ordered by fragment path and written one per line as
 
 After validating and preparing all outputs, Zwirn writes fragment files in path
 order and the document last. An operational failure can leave earlier writes in
-place.
+place. In live mode, reconciliation attention and recoverable blockers do not
+become the foreground process's exit status; orderly signal shutdown exits 0,
+while session startup failure exits 2.
 
 ## Reference
 

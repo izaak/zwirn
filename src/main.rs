@@ -8,13 +8,16 @@ use zwirn::engine::{Error, Mode, Report, Request, execute};
 use zwirn::fragment::FragmentPath;
 use zwirn::reconcile::Operation;
 
+#[cfg(target_os = "macos")]
+mod live;
+
 /// Synchronize external source fragments with Audulus documents.
 #[derive(Debug, Parser)]
 #[command(
     version,
     about,
-    override_usage = "zwirn <COMMAND> [OPTIONS] <DOCUMENT> [FRAGMENT]...",
-    after_help = "DOCUMENT is an .audulus4 file.\nFRAGMENT is an exact marker path relative to the source root.\nOmitting fragments selects every fragment.\n\nExamples:\n  zwirn status patch.audulus4\n  zwirn sync patch.audulus4\n  zwirn embed patch.audulus4 src/filter.lua"
+    override_usage = "zwirn <COMMAND>",
+    after_help = "DOCUMENT is an .audulus4 file.\nFor one-shot commands, FRAGMENT is an exact marker path relative to the source root; omitting fragments selects every fragment.\n\nExamples:\n  zwirn status patch.audulus4\n  zwirn sync patch.audulus4\n  zwirn embed patch.audulus4 src/filter.lua\n  zwirn live patch.audulus4"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -34,6 +37,9 @@ enum Command {
 
     /// Apply safe changes in both directions.
     Sync(CommonArgs),
+
+    /// Reconcile saved changes in the foreground (macOS only).
+    Live(LiveArgs),
 }
 
 #[derive(Debug, Args)]
@@ -61,28 +67,15 @@ struct DirectionArgs {
     common: CommonArgs,
 }
 
-impl Command {
-    fn request<'a>(&'a self, cwd: &'a Path) -> Request<'a> {
-        let (common, mode) = match self {
-            Self::Status(common) => (common, Mode::Status),
-            Self::Embed(args) => (
-                &args.common,
-                Mode::Mutate(Operation::Embed { force: args.force }),
-            ),
-            Self::Extract(args) => (
-                &args.common,
-                Mode::Mutate(Operation::Extract { force: args.force }),
-            ),
-            Self::Sync(common) => (common, Mode::Mutate(Operation::Sync)),
-        };
-        Request {
-            cwd,
-            document: &common.document,
-            source_root: common.source_root.as_deref(),
-            selectors: &common.selectors,
-            mode,
-        }
-    }
+#[derive(Debug, Args)]
+struct LiveArgs {
+    /// Root directory for fragment paths (defaults to the document's parent).
+    #[arg(long, value_name = "DIR")]
+    source_root: Option<PathBuf>,
+
+    /// Audulus document to monitor and update.
+    #[arg(value_name = "DOCUMENT")]
+    document: PathBuf,
 }
 
 fn main() -> ExitCode {
@@ -96,11 +89,50 @@ fn main() -> ExitCode {
         }
     };
 
-    let report = match execute(cli.command.request(&cwd)) {
+    match &cli.command {
+        Command::Status(common) => execute_one_shot(&cwd, common, Mode::Status),
+        Command::Embed(args) => execute_one_shot(
+            &cwd,
+            &args.common,
+            Mode::Mutate(Operation::Embed { force: args.force }),
+        ),
+        Command::Extract(args) => execute_one_shot(
+            &cwd,
+            &args.common,
+            Mode::Mutate(Operation::Extract { force: args.force }),
+        ),
+        Command::Sync(common) => execute_one_shot(&cwd, common, Mode::Mutate(Operation::Sync)),
+        Command::Live(args) => execute_live(&cwd, args),
+    }
+}
+
+fn execute_one_shot(cwd: &Path, common: &CommonArgs, mode: Mode) -> ExitCode {
+    let report = match execute(Request {
+        cwd,
+        document: &common.document,
+        source_root: common.source_root.as_deref(),
+        selectors: &common.selectors,
+        mode,
+    }) {
         Ok(report) => report,
         Err(error) => return fail_engine(error),
     };
     finish(report)
+}
+
+#[cfg(target_os = "macos")]
+fn execute_live(cwd: &Path, args: &LiveArgs) -> ExitCode {
+    match live::run(cwd, &args.document, args.source_root.as_deref()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => fail(format_args!("{error}")),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn execute_live(_cwd: &Path, _args: &LiveArgs) -> ExitCode {
+    fail(format_args!(
+        "the `live` command is unsupported on this platform"
+    ))
 }
 
 fn finish(report: Report) -> ExitCode {

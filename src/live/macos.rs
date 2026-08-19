@@ -1,4 +1,4 @@
-//! macOS FSEvents ownership and delivery for a future live-session driver.
+//! macOS FSEvents ownership and delivery for a foreground live session.
 
 use std::ffi::{c_char, c_void};
 use std::fmt;
@@ -6,9 +6,11 @@ use std::os::unix::ffi::OsStrExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::mpsc::SyncSender;
 
 use thiserror::Error;
+
+use super::Wake;
 
 const MONITOR_OK: i32 = 0;
 const MONITOR_INVALID_ARGUMENT: i32 = 1;
@@ -18,18 +20,11 @@ const MONITOR_STREAM_CREATE_FAILED: i32 = 4;
 const MONITOR_QUEUE_CREATE_FAILED: i32 = 5;
 const MONITOR_STREAM_START_FAILED: i32 = 6;
 
-/// One conservative request to resample all configured live-session inputs.
-///
-/// It deliberately carries no event path, flags, ID, ordering, or batch
-/// identity. Every nonempty native delivery attempts to set this pending hint.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct Invalidation;
-
 /// A usable FSEvents stream and its owned callback state.
 ///
-/// The returned receiver already exists while the native stream starts, so an
-/// immediate callback can enqueue safely. A future driver owns the separate
-/// scheduler-readiness handoff after `start` returns.
+/// The driver creates the bounded wake channel before calling `start`, so an
+/// immediate callback can enqueue safely. The same channel can wake the driver
+/// for shutdown without adding polling or another forwarding thread.
 pub(crate) struct SessionMonitor {
     native: Option<NonNull<NativeSessionMonitor>>,
     // Native code borrows this stable allocation until `Drop` first stops and
@@ -43,14 +38,14 @@ impl SessionMonitor {
     pub(crate) fn start(
         source_root: &Path,
         document: &Path,
-    ) -> Result<(Self, Receiver<Invalidation>), StartError> {
+        wake: SyncSender<Wake>,
+    ) -> Result<Self, StartError> {
         let (source_root, document_parent) = fixed_scopes(source_root, document)?;
         let native_paths = [
             NativePath::new(&source_root),
             NativePath::new(&document_parent),
         ];
-        let (sender, receiver) = mpsc::sync_channel(1);
-        let mut callback_state = Box::new(CallbackState { sender });
+        let mut callback_state = Box::new(CallbackState { wake });
         let mut outcome = NativeOutcome::new();
 
         // SAFETY: both path buffers and `outcome` live through this synchronous
@@ -76,13 +71,10 @@ impl SessionMonitor {
             return Err(StartError::Native(outcome.failure()));
         }
 
-        Ok((
-            Self {
-                native: Some(native),
-                _callback_state: callback_state,
-            },
-            receiver,
-        ))
+        Ok(Self {
+            native: Some(native),
+            _callback_state: callback_state,
+        })
     }
 
     #[cfg(test)]
@@ -136,14 +128,14 @@ fn fixed_absolute(path: &Path, current_directory: Option<&Path>) -> PathBuf {
 }
 
 struct CallbackState {
-    sender: SyncSender<Invalidation>,
+    wake: SyncSender<Wake>,
 }
 
 impl CallbackState {
     fn invalidate(&self) {
         // Empty accepts the dirty state, full already represents it, and
         // disconnected means the receiving driver has begun shutdown.
-        let _ = self.sender.try_send(Invalidation);
+        let _ = self.wake.try_send(Wake::Filesystem);
     }
 }
 
@@ -289,6 +281,7 @@ unsafe extern "C" {
 
     fn zwirn_session_monitor_stop(monitor: *mut NativeSessionMonitor);
 
+    #[cfg(test)]
     fn zwirn_session_monitor_flush(monitor: *mut NativeSessionMonitor);
 }
 
@@ -297,7 +290,7 @@ mod tests {
     use std::ffi::OsString;
     use std::fs;
     use std::os::unix::ffi::OsStringExt;
-    use std::sync::mpsc::TryRecvError;
+    use std::sync::mpsc::{self, Receiver, TryRecvError};
     use std::time::Duration;
 
     use super::*;
@@ -315,7 +308,8 @@ mod tests {
         fs::create_dir(&documents).unwrap();
         fs::write(&document, b"before").unwrap();
 
-        let (monitor, hints) = SessionMonitor::start(&source_root, &document).unwrap();
+        let (wake, hints) = mpsc::sync_channel(1);
+        let monitor = SessionMonitor::start(&source_root, &document, wake).unwrap();
         monitor.flush_for_evidence();
         drain_preexisting_hints(&hints);
         let fragment = nested.join("voice.lua");
@@ -351,12 +345,13 @@ mod tests {
             .join("..")
             .join("source-root");
 
-        match SessionMonitor::start(&non_utf8_root, &document) {
+        let (wake, _) = mpsc::sync_channel(1);
+        match SessionMonitor::start(&non_utf8_root, &document, wake) {
             Err(StartError::Native(failure)) => {
                 assert_eq!(failure.kind, NativeFailureKind::PathRepresentation);
             }
             Err(other) => panic!("unexpected startup failure: {other}"),
-            Ok((monitor, _)) => {
+            Ok(monitor) => {
                 drop(monitor);
                 panic!("an unrepresentable scope must not report successful startup");
             }
@@ -365,16 +360,16 @@ mod tests {
 
     #[test]
     fn pending_invalidations_collapse_and_the_latch_refills_after_consumption() {
-        let (sender, receiver) = mpsc::sync_channel(1);
-        let mut state = CallbackState { sender };
+        let (wake, receiver) = mpsc::sync_channel(1);
+        let mut state = CallbackState { wake };
 
         deliver_for_test(&mut state);
         deliver_for_test(&mut state);
-        assert_eq!(receiver.try_recv(), Ok(Invalidation));
+        assert_eq!(receiver.try_recv(), Ok(Wake::Filesystem));
         assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
 
         deliver_for_test(&mut state);
-        assert_eq!(receiver.try_recv(), Ok(Invalidation));
+        assert_eq!(receiver.try_recv(), Ok(Wake::Filesystem));
     }
 
     fn deliver_for_test(state: &mut CallbackState) {
@@ -383,10 +378,10 @@ mod tests {
         unsafe { deliver_invalidation((state as *mut CallbackState).cast()) };
     }
 
-    fn assert_sender_released(receiver: Receiver<Invalidation>) {
+    fn assert_sender_released(receiver: Receiver<Wake>) {
         loop {
             match receiver.try_recv() {
-                Ok(Invalidation) => {}
+                Ok(Wake::Filesystem | Wake::Control) => {}
                 Err(TryRecvError::Disconnected) => break,
                 Err(TryRecvError::Empty) => {
                     panic!("monitor drop returned before releasing callback state")
@@ -395,10 +390,10 @@ mod tests {
         }
     }
 
-    fn drain_preexisting_hints(receiver: &Receiver<Invalidation>) {
+    fn drain_preexisting_hints(receiver: &Receiver<Wake>) {
         loop {
             match receiver.try_recv() {
-                Ok(Invalidation) => {}
+                Ok(Wake::Filesystem | Wake::Control) => {}
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     panic!("a live monitor released its callback state")

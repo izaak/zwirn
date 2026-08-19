@@ -17,9 +17,12 @@ This document records implementation decisions as Zwirn develops. `docs/design.m
 `signal-hook` owns macOS live-mode `SIGINT` and `SIGTERM` registration through
 a blocking iterator with an explicit close handle. A dedicated iterator thread
 records the first signal in shared shutdown state and issues a bounded wake;
-orderly teardown closes and joins that thread while leaving signal dispositions
-captured through imminent process exit. It is compiled only for macOS, so
-Linux's unsupported live command does not acquire signal machinery.
+after native monitoring has stopped and drained, orderly teardown closes the
+iterator to wake the thread, joins it, and drops the final delivery handle
+normally. This unregisters the installed actions; the dispositions they
+replaced remain effectively ignored through imminent process exit. It is
+compiled only for macOS, so Linux's unsupported live command does not acquire
+signal machinery.
 
 ## Filesystem I/O
 
@@ -61,12 +64,34 @@ Classification distinguishes absent-file and matching-file forms of observable `
 
 Command planning is pure. A forced selection is validated as a complete batch before actions are materialized.
 
+## Live command integration
+
+`clap` recognizes `live` on every supported target through a dedicated argument
+shape containing only the document and optional source root. On macOS, the
+binary privately includes the live-session module and passes it the current
+directory and configured paths. Other targets retain the visible command but
+return the unsupported status without compiling the live module, Apple bridge,
+or signal machinery.
+
+Because the configured document spelling cannot change during a session, live
+mode rejects a path without the `.audulus4` extension before it installs signal
+handling or starts FSEvents. Contents, existence, access, synchronization state,
+and other outcomes that can change at the fixed path remain part of recoverable
+reconciliation rather than startup validation.
+
+The binary-private driver reuses the public one-shot engine entry point for
+each reconciliation. It supplies the fixed session paths, an empty selector
+list, and the ordinary safe `sync` operation, so every run freshly discovers
+the complete inventory and retains the existing coordinated-access,
+validation, planning, commit, and partial-write behavior. Live wiring adds no
+public library API and no parallel synchronization implementation.
+
 ## Live scheduling
 
-Live-session scheduling is crate-private. The foreground driver executes each
-full-inventory reconciliation synchronously. Filesystem invalidations and
-shutdown requests remain bounded, level-triggered state while it runs rather
-than accumulating as event histories.
+Live-session scheduling is private to the binary. The foreground driver
+executes each full-inventory reconciliation synchronously. Filesystem
+invalidations and shutdown requests remain bounded, level-triggered state while
+it runs rather than accumulating as event histories.
 
 Signal handling and FSEvents monitoring are operational before the immediate
 initial reconciliation begins. After a reconciliation returns, a pending
@@ -75,9 +100,14 @@ subsequent reconciliation. Further invalidations may merge into that same
 request. Reconciliations therefore remain serialized without a separate
 reconciliation worker.
 
-The driver may briefly coalesce invalidations, but it does not preserve an
-exact batching interval or event count. Reconciliation outcomes do not request
-their own retry: after startup, another run requires a filesystem invalidation.
+The driver has no fixed-delay or periodic timer. When idle it blocks on the
+bounded wake channel, and a filesystem wake orders reconciliation synchronously
+as soon as the foreground loop processes it. During a reconciliation, the
+capacity-one filesystem wake is the complete pending dirty state. After the run
+returns, shutdown takes precedence; otherwise the driver consumes at most one
+filesystem wake and immediately orders one follow-up run. Reconciliation
+outcomes do not request their own retry: after startup, another run requires a
+filesystem invalidation.
 
 ## Live filesystem monitoring
 
@@ -92,3 +122,11 @@ Construction succeeds only after `FSEventStreamStart` returns true. Creation, qu
 ## Command reporting
 
 Results are path-first, tab-separated lines. Mutating commands omit already synchronized fragments and use `record`, `embed`, and `extract` for performed actions. Diagnostics use standard error.
+
+Live reporting is stateful and human-oriented. It reports session startup,
+performed actions, newly observed unresolved states or blockers, recovery, and
+shutdown. The driver retains enough previous outcome state to suppress
+unchanged unresolved results and repeated blocker diagnostics; a successful
+no-action reconciliation after an ordinary successful no-action result is
+silent. Completed external writes retained by an engine failure remain part of
+the diagnostic before the blocker is reported.
