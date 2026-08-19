@@ -89,7 +89,9 @@ A marker occupies an entire line, with optional leading indentation and trailing
 
 Horizontal whitespace separates the marker tokens, and paths contain no whitespace.
 
-The path on a closing marker exactly matches the canonical path on its opening marker. A hash is the first 16 lowercase hexadecimal digits of the SHA-256 digest and appears only on a closing marker.
+The path on a closing marker exactly matches the canonical path on its opening
+marker. A hash consists of 16 lowercase hexadecimal digits and appears only on
+a closing marker.
 
 Fragments may appear sequentially within a node. They do not nest or overlap. Orphaned, mismatched, and unterminated markers are structural errors.
 
@@ -164,16 +166,14 @@ zwirn live [--source-root DIR] DOCUMENT
 ```
 
 The document and source root follow the same resolution and validation rules
-as one-shot commands. A session operates on one document and its complete,
-freshly discovered fragment inventory. It has no fragment selectors,
-direction, force, daemon, or output-format options.
+as one-shot commands. A session uses the complete, freshly discovered fragment
+inventory and has no fragment selectors, direction, force, daemon, or
+output-format options.
 
-Each reconciliation applies the ordinary safe, bidirectional `sync` behavior,
-including coordinated access, validation, write ordering, and partial-commit
-reporting. It does not force conflicts or add deletion as a synchronization
-operation. In particular, an established fragment whose external file is
-absent remains `missing`; live mode reports it and does not recreate it
-automatically.
+Each reconciliation applies the ordinary safe, bidirectional `sync` behavior;
+live mode does not add deletion. In particular, an established fragment whose
+external file is absent remains `missing`; live mode reports it and does not
+recreate it automatically.
 
 A document replaced at the configured named path remains in scope, but live
 mode does not follow a document or source root moved to another path. A
@@ -182,8 +182,7 @@ monitoring begins because that fixed spelling cannot become valid during the
 session.
 
 On Linux, `live` remains visible in the command-line interface but reports that
-it is unsupported and exits with status 2. Existing one-shot behavior remains
-supported.
+it is unsupported and exits with status 2.
 
 ### Monitoring and reconciliation
 
@@ -212,10 +211,10 @@ usable event stream cannot be established or maintained, live mode reports the
 failure and exits with status 2.
 
 Once monitoring is operational, a reconciliation blocker does not terminate
-the session. Live mode reports the blocker and remains responsive to relevant
-filesystem changes. A later change triggers a fresh reconciliation, allowing a
-user to recover, for example, by correcting and saving a malformed fragment.
-There is no periodic or timed retry without a new filesystem hint.
+the session, which remains responsive to relevant filesystem changes. A later
+change triggers a fresh reconciliation, allowing a user to recover, for
+example, by correcting and saving a malformed fragment. There is no periodic
+or timed retry without a new filesystem hint.
 
 ### Diagnostics and shutdown
 
