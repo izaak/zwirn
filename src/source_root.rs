@@ -64,6 +64,9 @@ impl SourceRoot {
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         let mut file = self.directory.open_with(relative_path(path), &options)?;
+        // The exclusive creation handle is authoritative for the new file.
+        // Comparison probes remain capability-relative so alias detection does
+        // not weaken source-root containment.
         let identity = FileIdentity::from_metadata(&file.metadata()?);
         file.write_all(bytes)?;
         Ok(absent_targets

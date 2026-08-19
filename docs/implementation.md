@@ -41,20 +41,21 @@ written.
 Complete file reads and writes pass through a crate-private, statically
 dispatched access policy. Named paths identify coordinated accesses, while
 fragment bodies retain their capability-relative paths and parent-directory
-handling remains outside the policy. macOS selects coordinated access; other
-targets select direct access.
+handling remains outside the policy. Engine execution selects coordinated
+access on macOS and direct access on other targets.
 
 The macOS policy constructs a short-lived `NSFileCoordinator` without a
-Zwirn-owned file presenter and claims fragment paths even when they do not yet
-exist. A changed accessor or another failure before body invocation is not
-retried through direct access, and the accessor never replaces a fragment's
-capability-relative path.
+Zwirn-owned file presenter, uses default read and write options, and claims
+fragment paths even when they do not yet exist. A changed accessor or another
+failure before body invocation is not retried through direct access, and the
+accessor never replaces a fragment's capability-relative path.
 
 Pre-body coordination failures remain distinct from filesystem-body failures.
 Once the body is invoked, its result is authoritative; commit failures retain
-the paths written earlier. The native bridge prevents Objective-C exceptions
-and Rust panics from crossing the language boundary, and passes paths as
-filesystem-representation bytes so non-UTF-8 paths survive it. Its deployment
+the paths written earlier. The Objective-C bridge prevents exceptions and Rust
+panics from crossing the language boundary, and passes paths as
+filesystem-representation bytes so non-UTF-8 paths survive it. The bridge and
+its Foundation and Core Foundation linkage are macOS-only; its deployment
 target follows the Rust target rather than the host SDK.
 
 ## ADLS source fields
@@ -68,11 +69,11 @@ structure are reparsed.
 ## Live mode
 
 The CLI recognizes `live` on every target, but the private live-session module
-and its Apple dependencies compile only on macOS. Each reconciliation calls the
-public one-shot engine with the fixed session paths, no selectors, and safe
-`sync`; live mode has no parallel synchronization implementation. The fixed
-document extension is checked before the long-lived session machinery starts,
-while checks whose outcomes can change remain in reconciliation.
+and its macOS-specific dependencies compile only on macOS. Each reconciliation
+calls the public one-shot engine with the fixed session paths, no selectors,
+and safe `sync`; live mode has no parallel synchronization implementation. The
+fixed document extension is checked before the long-lived session machinery
+starts, while checks whose outcomes can change remain in reconciliation.
 
 The foreground driver calls the engine synchronously. Signal handling and
 FSEvents monitoring are active before the initial call. A capacity-one wake

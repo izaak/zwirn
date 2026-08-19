@@ -6,7 +6,7 @@ Zwirn currently updates documents with a direct `fs::write`. Audulus eventually 
 
 The key discovery is that writing through `NSFileCoordinator` changes this behavior. Our prototype performs the same byte write under a plain coordinated write claim. Audulus immediately reloads the open document, and updated Lua appears in place while inspecting the associated DSP node. No window cycling, dialogs, UI automation, or app restart is required.
 
-Audulus treats the reloaded document as clean. Instrumentation showed no subsequent hash, size, or inode change, and its Save command was disabled. It therefore does not immediately reserialize or compact Zwirn’s append-only FlatBuffer rewrite. Compaction should occur later when Audulus performs a normal save following an in-app edit.
+Audulus treats the reloaded document as clean. Instrumentation showed no subsequent hash, size, or inode change, and its Save command was disabled. It therefore does not immediately reserialize or compact Zwirn’s append-only FlatBuffer rewrite. Repeated later-save experiments show that Audulus compacts the rewrite when it next performs a normal save following an in-app edit.
 
 The implementation focus should be:
 

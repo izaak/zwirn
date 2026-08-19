@@ -107,6 +107,9 @@ impl Inventory {
         for fragment in discovered {
             validate_parents(&source_root, &fragment.path).map_err(PolicyFailure::Operation)?;
             let target = source_root.named_path(relative_path(&fragment.path));
+            // Keep the named-path rule explicit even though the identity check
+            // below also catches an existing document target; identity
+            // comparison additionally rejects differently named aliases.
             if document_origin.is_some_and(|document| document.path == target) {
                 return Err(PolicyFailure::Operation(InventoryError::DocumentTarget {
                     path: fragment.path,
