@@ -52,9 +52,11 @@ with no Zwirn-owned file presenter and uses the default read or write options.
 The named fragment path is claimed even when its target does not exist.
 
 Before invoking the filesystem body, the macOS policy compares the accessor's
-filesystem representation with the configured named path. The accessor does
-not replace the retained capability-relative path used by a fragment body, so
-the body's existing absence, creation, and alias logic remains in force.
+filesystem representation with the configured named path. A mismatch fails
+before the body runs, and neither it nor another pre-body coordination failure
+is retried through direct access. The accessor does not replace the retained
+capability-relative path used by a fragment body, so the body's existing
+absence, creation, and alias logic remains in force.
 
 A coordinated body runs synchronously and exactly once. Once invoked, its result is authoritative, so Rust selects its callback result before interpreting the native outcome. Coordination failures that occur before invocation are typed separately from body failures and retain the native error domain, code, and description when Foundation supplies them. A commit-side access failure also retains the fragment paths whose writes completed earlier in the ordered commit.
 
@@ -69,6 +71,9 @@ SDK.
 PatchObject pool indexes identify distinct tables. This gives each node handle an independently rewritable object.
 
 Rewriting appends replacement strings and redirects existing `f10` offsets. Audulus accepts this layout and compacts superseded strings when it next saves the document.
+
+Before commit, the prepared document is reparsed as ADLS and its source fields
+are reparsed for markers.
 
 ## Synchronization state
 
@@ -110,7 +115,8 @@ Reconciliation outcomes do not enqueue retries.
 The crate-private macOS monitoring boundary owns one FSEvents stream for the
 source-root hierarchy and the configured document's parent. Relative inputs
 are made absolute from one captured current directory without canonicalizing
-them. The stream is created at `kFSEventStreamEventIdSinceNow`.
+them. The stream is created at `kFSEventStreamEventIdSinceNow`; event IDs are
+neither exposed nor persisted, and the driver has no polling path.
 
 FSEvents requires its roots as Core Foundation strings, while the existing command boundary admits filesystem-path bytes that Core Foundation may not represent. Monitor paths therefore cross the native boundary as byte slices, but each complete configured monitor scope must be representable as a Core Foundation filesystem path. The bridge does not truncate, canonicalize, resolve, or substitute another watch root: failed exact conversion is a path-representation startup failure before stream creation. One-shot command path support is unchanged. Exact duplicate watch roots share one stream entry.
 

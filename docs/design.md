@@ -28,16 +28,19 @@ during discovery define that operation's inputs.
 
 ## Saved state and coordinated access
 
-On macOS, `status`, `embed`, `extract`, `sync`, and each live reconciliation
-coordinate their actual document and fragment reads and writes with filesystem
-presenters. Linux one-shot commands continue to use direct filesystem access.
+On macOS, `status`, `embed`, `extract`, `sync`, and each live reconciliation use
+coordinated filesystem access so participating applications can mediate
+document and fragment reads and writes. Linux one-shot commands use direct
+filesystem access.
 
 The configured named paths remain fixed during a one-shot command or live
-session. If coordination supplies an accessor path different from the named
-path, the access fails before its filesystem operation runs. Zwirn does not
-follow the changed path or retry the operation with direct access.
+session. Zwirn does not follow a path moved during that operation.
 
-Coordination does not change Zwirn's synchronization states, validation before writes, source-root containment, exclusive creation, write ordering, partial-commit behavior, or reporting. It governs access to saved filesystem contents; Zwirn does not inspect or promise to protect unsaved state held inside Audulus or a source editor. Applications may remain open, but users should normally edit one representation at a time and save changes for them to participate in synchronization.
+Coordination affects only access to saved filesystem contents; other
+synchronization behavior remains unchanged. Zwirn does not inspect or protect
+unsaved state held inside Audulus or a source editor. Applications may remain
+open, but users should normally edit one representation at a time and save
+changes for them to participate in synchronization.
 
 ## Fragments
 
@@ -167,8 +170,7 @@ zwirn live [--source-root DIR] DOCUMENT
 
 The document and source root follow the same resolution and validation rules
 as one-shot commands. A session uses the complete, freshly discovered fragment
-inventory and has no fragment selectors, direction, force, daemon, or
-output-format options.
+inventory.
 
 Each reconciliation applies the ordinary safe, bidirectional `sync` behavior;
 live mode does not add deletion. In particular, an established fragment whose
@@ -176,10 +178,7 @@ external file is absent remains `missing`; live mode reports it and does not
 recreate it automatically.
 
 A document replaced at the configured named path remains in scope, but live
-mode does not follow a document or source root moved to another path. A
-configured document without the `.audulus4` extension is rejected before
-monitoring begins because that fixed spelling cannot become valid during the
-session.
+mode does not follow a document or source root moved to another path.
 
 On Linux, `live` remains visible in the command-line interface but reports that
 it is unsupported and exits with status 2.
@@ -193,28 +192,21 @@ leaving a gap in which a new change can be missed.
 
 Filesystem events are invalidation hints, not an ordered history of changes. A
 relevant hint requests a fresh reconciliation of the document and its full
-fragment inventory. Implementations may filter obviously unrelated hints and
-may reconcile more often than strictly necessary; event delivery and batching
-are not user-visible transactions.
+fragment inventory. Hints and reconciliations do not correspond one-to-one.
 
-Reconciliations are serialized. Implementations may briefly coalesce hints,
-but the batching policy and exact interval are not behavioral guarantees. A
-hint that arrives during a reconciliation guarantees at least one subsequent
-reconciliation rather than being absorbed into the active run. Processing of
-hints and control requests may be deferred until a synchronous reconciliation
-returns.
+Reconciliations are serialized, and multiple hints may be coalesced. A hint
+that arrives during a reconciliation guarantees at least one subsequent
+reconciliation rather than being absorbed into the active run.
 
-The foreground session starts its FSEvents stream from the current event
-position. It has no routine polling path and persists no event cursor. Dropped
-event and watched-root-change indications request a full reconciliation. If a
-usable event stream cannot be established or maintained, live mode reports the
-failure and exits with status 2.
+Indications of dropped events or a changed watched root request a full
+reconciliation. If filesystem monitoring cannot be established, live mode
+reports the failure and exits with status 2.
 
 Once monitoring is operational, a reconciliation blocker does not terminate
 the session, which remains responsive to relevant filesystem changes. A later
 change triggers a fresh reconciliation, allowing a user to recover, for
-example, by correcting and saving a malformed fragment. There is no periodic
-or timed retry without a new filesystem hint.
+example, by correcting and saving a malformed fragment. Without such a change,
+live mode does not retry on a timer.
 
 ### Diagnostics and shutdown
 
@@ -226,20 +218,14 @@ not change the reported state remain silent. Exact wording and line structure
 are not part of the contract.
 
 `SIGINT` and `SIGTERM` request an orderly shutdown. An idle session stops
-promptly. An active synchronous reconciliation finishes, and the request may be
-acted on after it returns. A shutdown request concurrent with the start of a
-reconciliation may be ordered on either side of that start. Once the request is
-ordered, no later reconciliation begins, and the process exits with status 0.
-Live mode does not add cancellation inside reconciliation.
+promptly. An active reconciliation finishes before exit, which may delay
+shutdown. A signal racing with the start of a reconciliation may allow that
+reconciliation to run. Once shutdown is accepted, no further reconciliation
+begins, and the process exits with status 0.
 
-Session startup and internal driver failures exit with status 2. Reconciliation
-attention and recoverable blockers do not become the live process's exit
-status.
-
-The first version has no Zwirn-owned file presenter, multi-document session,
-persistent configuration, daemon or control process, LaunchAgent packaging,
-status IPC, durable logging, persistent event history, polling fallback, or
-dirty-buffer integration. Those features require separate evidence and design.
+Session startup and unrecoverable session failures exit with status 2.
+Reconciliation attention and recoverable blockers do not become the live
+process's exit status.
 
 ## Validation
 
@@ -259,8 +245,8 @@ The document mutation set consists of fragment source and closing-marker hashes.
 
 Updating an existing hash replaces only its token. Establishing a hash inserts one separating space and the hash after the path on the closing marker. Existing marker indentation, comment spacing, token spacing, and trailing whitespace are preserved.
 
-The prepared document passes ADLS and marker parsing before writing. An
-operation producing no document change leaves the document file untouched.
+The prepared document is validated before writing. An operation producing no
+document change leaves the document file untouched.
 
 ## One-shot reporting and exit status
 
