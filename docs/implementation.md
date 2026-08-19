@@ -63,13 +63,21 @@ Command planning is pure. A forced selection is validated as a complete batch be
 
 ## Live scheduling
 
-The platform-independent live scheduling core is a crate-private, effect-emitting transition machine. It has no dependency on the command-line layer, filesystem monitoring, or reconciliation implementation. A later foreground driver will translate native hints and shutdown requests into serialized scheduler inputs, execute reconciliation effects synchronously through the existing full-inventory `sync` path, and report completion back to the scheduler. The driver calls the monitoring-ready transition only after startup succeeds, establishes hint delivery at that handoff, and handles returned effects promptly and reliably. The fresh initial reconciliation subsumes changes completed before the handoff.
+Live-session scheduling is crate-private. The foreground driver executes each
+full-inventory reconciliation synchronously. Filesystem invalidations and
+shutdown requests remain bounded, level-triggered state while it runs rather
+than accumulating as event histories.
 
-Monitoring readiness is the only transition that requests the immediate initial reconciliation. The scheduler enters its reconciling state before emitting a reconciliation effect, making that effect the serialized start of one run. Hints delivered from that point onward can only arm a serialized follow-up.
+Signal handling and FSEvents monitoring are operational before the immediate
+initial reconciliation begins. After a reconciliation returns, a pending
+shutdown prevents later work; otherwise, a pending invalidation requests one
+subsequent reconciliation. Further invalidations may merge into that same
+request. Reconciliations therefore remain serialized without a separate
+reconciliation worker.
 
-The first pending hint arms one fixed 50 millisecond coalescing timer. Later hints do not replace that timer. Expiry during reconciliation marks one follow-up as due; expiry after the run finishes starts the follow-up. The future driver delivers the single active timer exactly once; duplicate or misrouted callbacks are adapter defects rather than scheduler states.
-
-Reconciliation completion carries no outcome into the scheduler. A successful run, an attention result, and a blocker therefore have identical scheduling consequences: pending hinted work may proceed, but no result requests an unprompted retry. Emitting a reconciliation effect is the run-start linearization point. The driver executes each such effect exactly once and reports exactly one completion even if shutdown arrives after emission. Shutdown clears pending work immediately. An idle scheduler stops at once; a reconciling scheduler stops only when the synchronous run reports completion and cannot emit another reconciliation first.
+The driver may briefly coalesce invalidations, but it does not preserve an
+exact batching interval or event count. Reconciliation outcomes do not request
+their own retry: after startup, another run requires a filesystem invalidation.
 
 ## Live filesystem monitoring
 
