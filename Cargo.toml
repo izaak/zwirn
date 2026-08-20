@@ -1,6 +1,6 @@
 [package]
 name = "zwirn"
-version = "0.1.0-beta.1"
+version = "0.2.0-beta.1"
 edition = "2024"
 rust-version = "1.87"
 description = "Synchronize Lua, Lyte, and GLSL fragments between Audulus 4 documents and source files"

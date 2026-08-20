@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-
-# Repository defaults for native Apple-silicon macOS SDK lookups.
-XCSDK_PLATFORM=macosx \
-XCSDK_ARCH=arm64 \
-XCSDK_VARIANT=native \
-exec xcsdk "$@"
