@@ -1,13 +1,12 @@
 # Zwirn
 
-Zwirn synchronizes Lua, Lyte, and GLSL fragments between Audulus 4 documents and
-ordinary source files. Embedded source remains editable in Audulus while also
-available to other editors and version control. Zwirn transfers unambiguous
-changes in either direction.
+Zwirn synchronizes source code fragments in Audulus 4 patches with local files.
 
-Zwirn supports one-shot synchronization on macOS and Linux. macOS also supports
-a foreground `live` session. It is pre-release software intended for stable,
-trusted, version-controlled workspaces.
+One-shot commands are supported on macOS and Linux. macOS also supports
+a foreground `live` session.
+
+It is pre-release software intended for trusted, version-controlled
+workspaces.
 
 ## Install from source
 
@@ -19,31 +18,32 @@ cargo install --locked --path .
 
 ## Getting started
 
-Mark a region of source inside Audulus with a fragment path:
+In an Audulus code inspector, write markers to associate a fragment with a path:
 
 ```lua
--- @{ src/filter.lua
+-- @{ src/consts.lua
 local gain = 0.5
--- @} src/filter.lua
+-- @} src/consts.lua
 ```
 
-Zwirn synchronizes saved files on disk. Save changes in Audulus and in open
-source files before running a one-shot command; Audulus and source editors may
-remain open:
+By default, the path is relative to the Audulus document's parent directory.
+
+Audulus may remain open while Zwirn synchronizes unambiguous
+saved changes in both directions:
 
 ```console
 zwirn sync patch.audulus4
 ```
 
-If `src/filter.lua` does not exist, `sync` creates it beneath the document's
-directory and adds a synchronization hash to the closing marker:
+If `src/consts.lua` does not exist, `sync` creates it and adds a synchronization
+hash to the closing marker:
 
 ```lua
--- @} src/filter.lua 9238d3dc5eb11d81
+-- @} src/consts.lua 9238d3dc5eb11d81
 ```
 
 The external file contains only the source between the markers. Edit either
-copy, then run `sync` again.
+copy, save it, then run `sync` again.
 
 ## Commands
 
@@ -54,13 +54,13 @@ status   inspect without changes
 embed    source files → .audulus4
 extract  source files ← .audulus4
 sync     source files ↔ .audulus4
-live     reconcile saved changes in the foreground (macOS only)
+live     source files ↔ .audulus4 (foreground; macOS only)
 ```
 
-The one-shot commands accept:
+One-shot commands accept:
 
 ```text
-zwirn <status|embed|extract|sync> [--source-root DIR] DOCUMENT [FRAGMENT]...
+zwirn <status|embed|extract|sync> [OPTIONS] DOCUMENT [FRAGMENT]...
 ```
 
 Each `FRAGMENT` is an exact marker path relative to the source root. Pass one or
@@ -77,50 +77,29 @@ root with `--source-root`:
 zwirn sync --source-root sources patch.audulus4
 ```
 
-## Live synchronization on macOS
+## Live synchronization
 
-`live` starts a foreground session for one document and its complete fragment
-inventory:
-
-```text
-zwirn live [--source-root DIR] DOCUMENT
-```
-
-For example:
+On macOS, `live` runs in the foreground and watches one document and its source
+root, safely synchronizing saved changes in both directions:
 
 ```console
-zwirn live --source-root sources patch.audulus4
+zwirn live patch.audulus4
 ```
-
-The session starts filesystem monitoring before an immediate safe,
-bidirectional synchronization. It then reconciles newly saved changes under the
-source root or at the document path. Live mode uses the same conflict,
-containment, coordinated-access, validation, and ordered-write behavior as
-`sync`; it neither forces conflicts nor recreates an established fragment whose
-external file is missing.
-
-Reconciliation failures are reported without ending an operational session. A
-later filesystem change requests another reconciliation, so correcting and
-saving a blocked document or fragment can recover the session. There is no
-timed retry when nothing changes. Routine reconciliations with no action or
-reported-state change remain quiet.
-
-Press Control-C or send `SIGTERM` to request an orderly shutdown. An active
-reconciliation finishes before the process exits successfully. Live mode is
-visible but unsupported on Linux, where invoking it reports an error and exits
-with status 2.
 
 ## Markers
 
-Marker syntax follows the source-bearing node type:
+Fragments begin with an `@{ PATH` marker and end with an `@} PATH` marker.
 
-| Node type   | Language | Marker comment |
-|-------------|----------|----------------|
-| Canvas, DSP | Lua      | `--`           |
-| Shader      | GLSL     | `//`           |
-| Lyte DSP    | Lyte     | `//`           |
+Marker comments follow the source language: `--` for Lua and `//` for GLSL or
+Lyte.
 
-A source node may contain multiple sequential fragments.
+Leave the closing hash out when creating a fragment; Zwirn records it after
+synchronization.
+
+A node's source may contain multiple marked fragments.
+
+The [design document](docs/design.md#marker-grammar) defines the complete marker
+and path grammar.
 
 ## Conflicts
 
@@ -138,12 +117,10 @@ zwirn extract --force patch.audulus4 src/filter.lua
 With explicitly selected conflicts, forced `embed` selects the filesystem copy;
 forced `extract` selects the embedded copy.
 
-## Output and exit status
+## One-shot output and exit status
 
 Results are ordered by fragment path and written one per line as
-`PATH<TAB>RESULT` for one-shot commands. Live mode writes human-oriented session
-diagnostics to standard error instead of defining a machine-readable output
-format.
+`PATH<TAB>RESULT`.
 
 ```text
 0   every selected fragment is synchronized
@@ -153,9 +130,7 @@ format.
 
 After validating and preparing all outputs, Zwirn writes fragment files in path
 order and the document last. An operational failure can leave earlier writes in
-place. In live mode, reconciliation attention and recoverable blockers do not
-become the foreground process's exit status; orderly signal shutdown exits 0,
-while session startup failure exits 2.
+place.
 
 ## Reference
 
